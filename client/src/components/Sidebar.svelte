@@ -2,6 +2,7 @@
   import { createEventDispatcher } from 'svelte'
   export let contacts: Array<{id:string, last:string, unread?:number}> = []
   export let selected: string | null = null
+  export let version = ''
   const dispatch = createEventDispatcher()
   function pick(id:string) { dispatch('select', { id }) }
 
@@ -67,11 +68,14 @@
   </div>
 
   <div class="sidebar-footer">
-    <div class="flex items-center gap-2 opacity-50">
-      <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
-        <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.47 4.34-3.1 8.24-7 9.43V12H5V6.3l7-3.11v8.8z" />
-      </svg>
-      <span>Secure PGP Identity</span>
+    <div class="flex items-center justify-between w-full opacity-50">
+      <div class="flex items-center gap-2">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+          <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.47 4.34-3.1 8.24-7 9.43V12H5V6.3l7-3.11v8.8z" />
+        </svg>
+        <span>Secure PGP</span>
+      </div>
+      <span class="text-[10px] font-mono">v{version}</span>
     </div>
   </div>
 </aside>

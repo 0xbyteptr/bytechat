@@ -6,8 +6,10 @@
   import Sidebar from './components/Sidebar.svelte'
   import ChatWindow from './components/ChatWindow.svelte'
   import Auth from './components/Auth.svelte'
+  import pkg from '../package.json'
 
   const API_URL = import.meta.env.VITE_API_URL || ''
+  const version = pkg.version
 
   let id = ''
   let pgpPrivateKey = ''
@@ -432,7 +434,7 @@
 
     <main class="flex flex-1 overflow-hidden relative">
       <div class="sidebar-wrapper" class:hidden-mobile={!showSidebar}>
-        <Sidebar {contacts} selected={contact} on:select={(e)=>{ contact = e.detail.id; showSidebar = false; }} on:addContact={(e) => addContact(e.detail.id)} />
+        <Sidebar {contacts} {version} selected={contact} on:select={(e)=>{ contact = e.detail.id; showSidebar = false; }} on:addContact={(e) => addContact(e.detail.id)} />
       </div>
       <div class="chat-wrapper" class:hidden-mobile={showSidebar}>
         <ChatWindow 
