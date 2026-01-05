@@ -22,6 +22,7 @@
   let contact: string | null = null
   let keypair: {publicKey:string, secretKey:string} | null = null
   let keys: Record<string,string> = {}
+  let pendingKeys = new Set<string>()
   let ws: { send: (d: string) => void, close: () => void, readyState: number } | null = null
   let wsStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
   interface Message {
@@ -203,20 +204,34 @@
       const from = msg.from
       const chatWith = msg.chatWith || from
       try {
-        let senderPk = keys[from]
-        const fetchKey = async () => {
-          const res = await fetch(`${API_URL}/keys?id=${encodeURIComponent(from)}`)
-          if (res.ok) {
-            const data = await res.json()
-            senderPk = data.publicKey
-            keys = { ...keys, [from]: senderPk }
-            return senderPk
+        const fetchKey = async (targetId: string) => {
+          if (pendingKeys.has(targetId)) {
+            // Wait for existing request
+            for (let i = 0; i < 10; i++) {
+              await new Promise(r => setTimeout(r, 200))
+              if (keys[targetId]) return keys[targetId]
+            }
+          }
+          
+          if (keys[targetId]) return keys[targetId]
+          
+          pendingKeys.add(targetId)
+          try {
+            const res = await fetch(`${API_URL}/keys?id=${encodeURIComponent(targetId)}`)
+            if (res.ok) {
+              const data = await res.json()
+              keys = { ...keys, [targetId]: data.publicKey }
+              return data.publicKey
+            }
+          } finally {
+            pendingKeys.delete(targetId)
           }
           return null
         }
 
+        let senderPk = keys[from]
         if (!senderPk) {
-          senderPk = await fetchKey()
+          senderPk = await fetchKey(from)
         }
 
         if (!senderPk) {
@@ -243,7 +258,10 @@
 
         // If decryption failed, try fetching the key again (it might have changed)
         if (!text && msg.cipher && !msg.cipher.includes('typing')) {
-          const newPk = await fetchKey()
+          // Force a re-fetch if decryption failed
+          keys = { ...keys }
+          delete keys[from] 
+          const newPk = await fetchKey(from)
           if (newPk && newPk !== senderPk) {
             text = await attemptDecrypt(newPk) || ''
           }
@@ -308,10 +326,15 @@
   }
 
   async function fetchContactKey(name:string) {
-    if(!name) return
-    const res = await fetch(`${API_URL}/keys?id=${encodeURIComponent(name)}`)
-    if(res.ok) {
-      keys = { ...keys, [name]: (await res.json()).publicKey }
+    if(!name || keys[name] || pendingKeys.has(name)) return
+    pendingKeys.add(name)
+    try {
+      const res = await fetch(`${API_URL}/keys?id=${encodeURIComponent(name)}`)
+      if(res.ok) {
+        keys = { ...keys, [name]: (await res.json()).publicKey }
+      }
+    } finally {
+      pendingKeys.delete(name)
     }
   }
 
