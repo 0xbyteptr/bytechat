@@ -154,6 +154,7 @@
         return
       }
       const from = msg.from
+      const chatWith = msg.chatWith || from
       try {
         const senderPk = keys[from] ?? (await fetch(`${API_URL}/keys?id=${encodeURIComponent(from)}`).then(r=>r.json()).then(j=>j.publicKey))
         if (!keys[from]) {
@@ -169,7 +170,7 @@
           text = '<no key to decrypt or key mismatch>'
         }
         
-        let msgObj: any = { from, text, ts: Date.now() }
+        let msgObj: any = { from, text, ts: msg.ts || Date.now() }
         try {
           if (text.startsWith('{') && text.includes('bytechat_file')) {
             const parsed = JSON.parse(text)
@@ -186,17 +187,27 @@
           // Not a JSON/file message, treat as plain text
         }
 
+        // Avoid duplicates (especially from history)
+        const isDuplicate = (messagesMap[chatWith] || []).some(m => 
+          m.ts === msgObj.ts && m.text === msgObj.text && m.from === msgObj.from
+        )
+        if (isDuplicate) return
+
         messagesMap = {
           ...messagesMap,
-          [from]: [...(messagesMap[from]||[]), msgObj]
+          [chatWith]: [...(messagesMap[chatWith]||[]), msgObj].sort((a, b) => (a.ts || 0) - (b.ts || 0))
         }
-        if (from !== contact) {
-          unreadMap = { ...unreadMap, [from]: (unreadMap[from] || 0) + 1 }
+        
+        // Don't notify for history messages
+        if (msg.isHistory) return
+
+        if (chatWith !== contact) {
+          unreadMap = { ...unreadMap, [chatWith]: (unreadMap[chatWith] || 0) + 1 }
           const displayMsg = msgObj.file ? `Sent a file: ${msgObj.file.fileName}` : text
-          notify(from, displayMsg.length > 50 ? displayMsg.slice(0, 50) + '...' : displayMsg)
+          notify(chatWith, displayMsg.length > 50 ? displayMsg.slice(0, 50) + '...' : displayMsg)
         } else if (!isAppVisible) {
           const displayMsg = msgObj.file ? `Sent a file: ${msgObj.file.fileName}` : text
-          notify(from, displayMsg.length > 50 ? displayMsg.slice(0, 50) + '...' : displayMsg)
+          notify(chatWith, displayMsg.length > 50 ? displayMsg.slice(0, 50) + '...' : displayMsg)
         }
       } catch (e) {
         console.error('Failed to process message', e)
@@ -237,7 +248,7 @@
     ws.send(JSON.stringify(payload))
     messagesMap = {
       ...messagesMap,
-      [to]: [...(messagesMap[to]||[]), { from: id, text, ts: Date.now() }]
+      [to]: [...(messagesMap[to]||[]), { from: id, text, ts: Date.now() }].sort((a, b) => (a.ts || 0) - (b.ts || 0))
     }
     sendTyping(false)
   }
@@ -268,7 +279,7 @@
     ws.send(JSON.stringify(payload))
     messagesMap = {
       ...messagesMap,
-      [to]: [...(messagesMap[to]||[]), { from: id, text: `Sent file: ${fileName}`, file: { fileName, fileType, fileData }, ts: Date.now() }]
+      [to]: [...(messagesMap[to]||[]), { from: id, text: `Sent file: ${fileName}`, file: { fileName, fileType, fileData }, ts: Date.now() }].sort((a, b) => (a.ts || 0) - (b.ts || 0))
     }
   }
 

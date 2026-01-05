@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
@@ -21,10 +22,18 @@ import (
 )
 
 const dataDir = "data"
+const historyDir = "data/history"
 
 type challengeData struct {
 	Code      string
 	PublicKey string
+}
+
+type StoredMessage struct {
+	From string                 `json:"from"`
+	To   string                 `json:"to"`
+	Msg  map[string]interface{} `json:"msg"`
+	Ts   int64                  `json:"ts"`
 }
 
 var (
@@ -32,6 +41,7 @@ var (
 	challenges    = make(map[string]challengeData) // id -> challenge data
 	keysMutex     = sync.RWMutex{}
 	challengesMux = sync.RWMutex{}
+	historyMux    = sync.Mutex{}
 	clients       = make(map[string]*client) // id -> client
 	clientsMux    = sync.RWMutex{}
 	upgrader      = websocket.Upgrader{
@@ -62,6 +72,9 @@ func init() {
 
 	// Ensure data directory exists
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		log.Fatal(err)
+	}
+	if err := os.MkdirAll(historyDir, 0755); err != nil {
 		log.Fatal(err)
 	}
 
@@ -357,6 +370,24 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	clients[id] = c
 	clientsMux.Unlock()
 	log.Printf("%s connected\n", id)
+
+	// Send history to client
+	go func() {
+		history := getHistory(id)
+		for _, sm := range history {
+			// For history, we need to tell the client who the "other" person is
+			// so it can put the message in the right chat window.
+			other := sm.From
+			if sm.From == id {
+				other = sm.To
+			}
+			sm.Msg["from"] = sm.From
+			sm.Msg["chatWith"] = other
+			sm.Msg["isHistory"] = true
+			c.send(sm.Msg)
+		}
+	}()
+
 	defer func() {
 		clientsMux.Lock()
 		delete(clients, id)
@@ -377,6 +408,21 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		// Add timestamp if missing
+		if _, ok := msg["ts"]; !ok {
+			msg["ts"] = time.Now().UnixMilli()
+		}
+
+		// Save to history for both sender and recipient
+		sm := StoredMessage{
+			From: id,
+			To:   to,
+			Msg:  msg,
+			Ts:   jsonTime(msg["ts"]),
+		}
+		saveToHistory(id, sm)
+		saveToHistory(to, sm)
+
 		// relay to recipient if connected
 		clientsMux.RLock()
 		toClient, ok := clients[to]
@@ -392,4 +438,50 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			log.Printf("recipient %s offline; dropping message\n", to)
 		}
 	}
+}
+
+func jsonTime(v interface{}) int64 {
+	switch t := v.(type) {
+	case float64:
+		return int64(t)
+	case int64:
+		return t
+	}
+	return 0
+}
+
+func saveToHistory(id string, sm StoredMessage) {
+	historyMux.Lock()
+	defer historyMux.Unlock()
+
+	f, err := os.OpenFile(filepath.Join(historyDir, id+".log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("history save error: %v\n", err)
+		return
+	}
+	defer f.Close()
+	json.NewEncoder(f).Encode(sm)
+}
+
+func getHistory(id string) []StoredMessage {
+	historyMux.Lock()
+	defer historyMux.Unlock()
+
+	content, err := os.ReadFile(filepath.Join(historyDir, id+".log"))
+	if err != nil {
+		return nil
+	}
+
+	var history []StoredMessage
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var sm StoredMessage
+		if err := json.Unmarshal([]byte(line), &sm); err == nil {
+			history = append(history, sm)
+		}
+	}
+	return history
 }
