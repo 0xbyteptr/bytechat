@@ -156,9 +156,19 @@
       const from = msg.from
       const chatWith = msg.chatWith || from
       try {
-        const senderPk = keys[from] ?? (await fetch(`${API_URL}/keys?id=${encodeURIComponent(from)}`).then(r=>r.json()).then(j=>j.publicKey))
-        if (!keys[from]) {
-          keys = { ...keys, [from]: senderPk }
+        let senderPk = keys[from]
+        if (!senderPk) {
+          const res = await fetch(`${API_URL}/keys?id=${encodeURIComponent(from)}`)
+          if (res.ok) {
+            const data = await res.json()
+            senderPk = data.publicKey
+            keys = { ...keys, [from]: senderPk }
+          }
+        }
+
+        if (!senderPk) {
+          console.warn(`No key found for ${from}, skipping message`)
+          return
         }
         
         let text = ''

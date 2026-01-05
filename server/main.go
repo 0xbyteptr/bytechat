@@ -121,9 +121,8 @@ func (c *client) send(v interface{}) error {
 	return c.conn.WriteJSON(v)
 }
 
-func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Set CORS headers for every request, including errors
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
 		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
@@ -132,18 +131,19 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		next(w, r)
-	}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func main() {
-	http.HandleFunc("/challenge", corsMiddleware(challengeHandler))
-	http.HandleFunc("/keys", corsMiddleware(keysHandler)) // POST to register, GET to fetch
-	http.HandleFunc("/ws", wsHandler)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/challenge", challengeHandler)
+	mux.HandleFunc("/keys", keysHandler) // POST to register, GET to fetch
+	mux.HandleFunc("/ws", wsHandler)
 
 	addr := ":8080"
 	fmt.Printf("ByteChat server starting on %s (Max File Size: %d MB)\n", addr, maxFileSize/1024/1024)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	log.Fatal(http.ListenAndServe(addr, corsMiddleware(mux)))
 }
 
 func isPGP(key string) bool {
