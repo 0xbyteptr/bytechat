@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "types": ["svelte", "vite/client"],
+    "types": ["svelte", "vite/client", "@capacitor/core", "@capacitor/local-notifications"],
     "verbatimModuleSyntax": true,
     "module": "ESNext",
     "moduleResolution": "bundler",

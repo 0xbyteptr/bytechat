@@ -7,6 +7,8 @@
   import ChatWindow from './components/ChatWindow.svelte'
   import Auth from './components/Auth.svelte'
   import pkg from '../package.json'
+  import { LocalNotifications } from '@capacitor/local-notifications'
+  import { Capacitor } from '@capacitor/core'
 
   const API_URL = import.meta.env.VITE_API_URL || ''
   const version = pkg.version
@@ -32,6 +34,87 @@
 
   let typingTimeout: any = null
   let showSidebar = true
+  let isAppVisible = true
+  let notificationPermission = 'default'
+
+  function playPing() {
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
+      if (!AudioContextClass) return
+      const audioCtx = new AudioContextClass()
+      if (audioCtx.state === 'suspended') audioCtx.resume()
+      
+      const oscillator = audioCtx.createOscillator()
+      const gainNode = audioCtx.createGain()
+
+      oscillator.connect(gainNode)
+      gainNode.connect(audioCtx.destination)
+
+      oscillator.type = 'sine'
+      oscillator.frequency.setValueAtTime(880, audioCtx.currentTime)
+      gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime)
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2)
+
+      oscillator.start()
+      oscillator.stop(audioCtx.currentTime + 0.2)
+    } catch (e) {
+      console.warn('Failed to play ping sound', e)
+    }
+  }
+
+  async function requestNotificationPermission() {
+    if (Capacitor.isNativePlatform()) {
+      const status = await LocalNotifications.checkPermissions()
+      notificationPermission = status.display
+      if (status.display !== 'granted') {
+        const res = await LocalNotifications.requestPermissions()
+        notificationPermission = res.display
+      }
+    } else if ('Notification' in window) {
+      notificationPermission = Notification.permission
+      if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+        const res = await Notification.requestPermission()
+        notificationPermission = res
+      }
+    }
+  }
+
+  async function notify(title: string, body: string) {
+    if (isAppVisible && contact === title) return // Don't notify if looking at the chat
+
+    playPing()
+
+    if (Capacitor.isNativePlatform()) {
+      await LocalNotifications.schedule({
+        notifications: [
+          {
+            title,
+            body,
+            id: Math.floor(Math.random() * 10000),
+            schedule: { at: new Date(Date.now() + 100) },
+            attachments: undefined,
+            actionTypeId: '',
+            extra: null
+          }
+        ]
+      })
+    } else if ('Notification' in window && Notification.permission === 'granted') {
+      // Use Service Worker notification if available (better for PWA/Mobile)
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.ready.then(registration => {
+          registration.showNotification(title, {
+            body,
+            icon: '/favicon.ico',
+            badge: '/favicon.ico',
+            tag: 'bytechat-msg',
+            renotify: true
+          } as any)
+        })
+      } else {
+        new Notification(title, { body })
+      }
+    }
+  }
 
   $: currentMessages = contact ? (messagesMap[contact] || []) : []
 
@@ -109,6 +192,11 @@
         }
         if (from !== contact) {
           unreadMap = { ...unreadMap, [from]: (unreadMap[from] || 0) + 1 }
+          const displayMsg = msgObj.file ? `Sent a file: ${msgObj.file.fileName}` : text
+          notify(from, displayMsg.length > 50 ? displayMsg.slice(0, 50) + '...' : displayMsg)
+        } else if (!isAppVisible) {
+          const displayMsg = msgObj.file ? `Sent a file: ${msgObj.file.fileName}` : text
+          notify(from, displayMsg.length > 50 ? displayMsg.slice(0, 50) + '...' : displayMsg)
         }
       } catch (e) {
         console.error('Failed to process message', e)
@@ -259,6 +347,15 @@
   }
 
   onMount(()=>{
+    if ('Notification' in window) {
+      notificationPermission = Notification.permission;
+    }
+    
+    const handleVisibilityChange = () => {
+      isAppVisible = document.visibilityState === 'visible'
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
     const saved = localStorage.getItem('bytechat_session')
     if(saved) {
       try {
@@ -425,6 +522,12 @@
             <span class="font-bold text-accent">{id}</span>
           </div>
           <div class="flex gap-2">
+            {#if notificationPermission !== 'granted'}
+              <button class="btn-secondary text-xs py-1.5 px-3 rounded-lg flex items-center gap-1" on:click={requestNotificationPermission} title="Enable Notifications">
+                <span class="hidden sm:inline">Enable Notifications</span>
+                <span class="sm:hidden">🔔</span>
+              </button>
+            {/if}
             <button class="btn-secondary text-xs py-1.5 px-3 rounded-lg" on:click={exportKeys}>Export</button>
             <button class="btn-secondary text-xs py-1.5 px-3 rounded-lg" on:click={logout}>Logout</button>
           </div>
