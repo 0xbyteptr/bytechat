@@ -2,9 +2,10 @@
   import { createEventDispatcher } from 'svelte'
   import { generateKeyPair, decrypt } from '../lib/crypto'
   import { getPublicKeyFromPrivate, decryptPGP } from '../lib/pgp'
+  import { Capacitor } from '@capacitor/core'
 
   const dispatch = createEventDispatcher()
-  const API_URL = import.meta.env.VITE_API_URL || ''
+  const API_URL = import.meta.env.VITE_API_URL || (Capacitor.isNativePlatform() ? 'https://api.byteptr.xyz' : '')
 
   export let id = ''
   export let pgpPrivateKey = ''
@@ -16,7 +17,8 @@
   let loading = false
 
   async function loginWithPGP() {
-    if (!id || !pgpPrivateKey) {
+    const trimmedId = id.trim()
+    if (!trimmedId || !pgpPrivateKey) {
       alert('ID and PGP Private Key are required')
       return
     }
@@ -26,18 +28,23 @@
       const resChallenge = await fetch(`${API_URL}/challenge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, publicKey: pubKey })
+        body: JSON.stringify({ id: trimmedId, publicKey: pubKey })
       })
       if (!resChallenge.ok) throw new Error(await resChallenge.text())
       const { encryptedChallenge } = await resChallenge.json()
+      
+      if (!encryptedChallenge.includes('-----BEGIN PGP')) {
+        throw new Error("This ID is registered with Nacl. Please use Nacl Login tab.")
+      }
+
       const code = await decryptPGP(pgpPrivateKey, encryptedChallenge, pgpPassphrase) as string
       const res = await fetch(`${API_URL}/keys`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, code })
+        body: JSON.stringify({ id: trimmedId, code })
       })
       if (res.ok) {
-        dispatch('authSuccess', { id, publicKey: pubKey, type: 'pgp', pgpPrivateKey, pgpPassphrase })
+        dispatch('authSuccess', { id: trimmedId, publicKey: pubKey, type: 'pgp', pgpPrivateKey, pgpPassphrase })
       } else {
         alert('Login failed: ' + await res.text())
       }
@@ -49,7 +56,8 @@
   }
 
   async function loginWithNacl() {
-    if (!id || !naclSecretKey) {
+    const trimmedId = id.trim()
+    if (!trimmedId || !naclSecretKey) {
       alert('ID and Nacl Secret Key are required')
       return
     }
@@ -57,19 +65,25 @@
     try {
       // In tweetnacl, we can't easily get public key from secret key without the full keypair object
       // but we can just try to fetch the public key from the server first if it exists
-      const resKey = await fetch(`${API_URL}/keys?id=${encodeURIComponent(id)}`)
+      const resKey = await fetch(`${API_URL}/keys?id=${encodeURIComponent(trimmedId)}`)
       if (!resKey.ok) throw new Error("User not found. Please register first.")
       const { publicKey: pubKey } = await resKey.json()
+
+      if (pubKey.includes('-----BEGIN PGP')) {
+        throw new Error("This ID is registered with PGP. Please use PGP Login tab.")
+      }
 
       const resChallenge = await fetch(`${API_URL}/challenge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, publicKey: pubKey })
+        body: JSON.stringify({ id: trimmedId, publicKey: pubKey })
       })
       if (!resChallenge.ok) throw new Error(await resChallenge.text())
       const { encryptedChallenge, serverPublicKey } = await resChallenge.json()
       
       const [cipher, nonce] = encryptedChallenge.split('|')
+      if (!nonce) throw new Error("Invalid challenge format from server.")
+
       const code = decrypt(naclSecretKey, serverPublicKey, cipher, nonce)
       
       if (!code) throw new Error("Failed to decrypt challenge. Check your secret key.")
@@ -77,10 +91,10 @@
       const res = await fetch(`${API_URL}/keys`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, code })
+        body: JSON.stringify({ id: trimmedId, code })
       })
       if (res.ok) {
-        dispatch('authSuccess', { id, publicKey: pubKey, type: 'nacl', keypair: { publicKey: pubKey, secretKey: naclSecretKey } })
+        dispatch('authSuccess', { id: trimmedId, publicKey: pubKey, type: 'nacl', keypair: { publicKey: pubKey, secretKey: naclSecretKey } })
       } else {
         alert('Login failed: ' + await res.text())
       }

@@ -64,12 +64,12 @@ export async function encryptPGP(publicKeyArmored: string, text: string) {
 }
 
 export async function decryptPGP(privateKeyArmored: string, encryptedArmored: string, passphrase?: string) {
-  const privateKey = await openpgp.readPrivateKey({ armoredKey: privateKeyArmored })
+  const privateKey = await openpgp.readPrivateKey({ armoredKey: privateKeyArmored.trim() })
   const unlockedPrivateKey = passphrase 
     ? await openpgp.decryptKey({ privateKey, passphrase })
     : privateKey
     
-  const message = await openpgp.readMessage({ armoredMessage: encryptedArmored })
+  const message = await openpgp.readMessage({ armoredMessage: encryptedArmored.trim() })
   const { data: decrypted } = await openpgp.decrypt({
     message,
     decryptionKeys: unlockedPrivateKey
@@ -79,19 +79,19 @@ export async function decryptPGP(privateKeyArmored: string, encryptedArmored: st
     return decrypted
   }
   
-  // If it's a stream or Uint8Array, we need to handle it
+  const decoder = new TextDecoder()
   if (decrypted instanceof Uint8Array) {
-    return new TextDecoder().decode(decrypted)
+    return decoder.decode(decrypted)
   }
   
   // If it's a stream (WebStream), we need to read it
   const reader = (decrypted as any).getReader()
   let result = ''
-  const decoder = new TextDecoder()
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
-    result += decoder.decode(value)
+    result += decoder.decode(value, { stream: true })
   }
+  result += decoder.decode() // flush
   return result
 }

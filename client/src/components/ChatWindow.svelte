@@ -283,6 +283,8 @@
     overflow-y: auto;
     padding: 1rem;
     scroll-behavior: smooth;
+    display: flex;
+    flex-direction: column;
   }
 
   .message-list-inner {
@@ -292,6 +294,7 @@
     max-width: 900px;
     margin: 0 auto;
     width: 100%;
+    margin-top: auto;
   }
 
   .upload-progress-container {
@@ -332,8 +335,10 @@
   }
 
   .chat-footer {
-    padding: 1rem;
+    padding: 0.75rem;
     background: var(--bg);
+    border-top: 1px solid var(--surface-lighter);
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
   }
 
   .input-container {
@@ -342,8 +347,8 @@
     gap: 0.5rem;
     background: var(--surface);
     border: 1px solid var(--surface-lighter);
-    padding: 0.5rem;
-    border-radius: 16px;
+    padding: 0.4rem 0.6rem;
+    border-radius: 24px;
     max-width: 900px;
     margin: 0 auto;
     transition: border-color 0.2s, box-shadow 0.2s;

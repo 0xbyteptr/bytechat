@@ -1,5 +1,15 @@
+import { Capacitor } from '@capacitor/core'
+
 export function connectWS(id: string, onMessage: (m: any)=>void, onStatus: (s: 'connected' | 'disconnected' | 'connecting') => void) {
-  const baseUrl = import.meta.env.VITE_WS_URL || (window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + window.location.host
+  let baseUrl = import.meta.env.VITE_WS_URL
+  if (!baseUrl) {
+    if (Capacitor.isNativePlatform()) {
+      // Default to emulator IP if native, otherwise user must provide VITE_WS_URL
+      baseUrl = 'wss://api.byteptr.xyz'
+    } else {
+      baseUrl = (window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + window.location.host
+    }
+  }
   const url = `${baseUrl}/ws?id=${encodeURIComponent(id)}`
   
   let ws: WebSocket | null = null

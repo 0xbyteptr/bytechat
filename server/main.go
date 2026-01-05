@@ -194,6 +194,7 @@ func challengeHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func encryptNacl(publicKeyBase64, text string) (string, string, error) {
+	publicKeyBase64 = strings.TrimSpace(publicKeyBase64)
 	pubBytes, err := base64.StdEncoding.DecodeString(publicKeyBase64)
 	if err != nil {
 		return "", "", err

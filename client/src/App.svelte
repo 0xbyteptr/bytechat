@@ -10,7 +10,7 @@
   import { LocalNotifications } from '@capacitor/local-notifications'
   import { Capacitor } from '@capacitor/core'
 
-  const API_URL = import.meta.env.VITE_API_URL || ''
+  const API_URL = import.meta.env.VITE_API_URL || (Capacitor.isNativePlatform() ? 'https://api.byteptr.xyz' : '')
   const version = pkg.version
 
   let id = ''
@@ -163,10 +163,10 @@
         let text = ''
         if (isPGP(pgpPrivateKey) && msg.cipher.includes('-----BEGIN PGP MESSAGE-----')) {
           text = await decryptPGP(pgpPrivateKey, msg.cipher, pgpPassphrase) as string
-        } else if (keypair) {
+        } else if (keypair && !senderPk.includes('-----BEGIN PGP')) {
           text = decrypt(keypair.secretKey, senderPk, msg.cipher, msg.nonce) || '<failed to decrypt>'
         } else {
-          text = '<no key to decrypt>'
+          text = '<no key to decrypt or key mismatch>'
         }
         
         let msgObj: any = { from, text, ts: Date.now() }
@@ -468,6 +468,8 @@
     height: 100%;
     min-width: 0;
     background: var(--bg);
+    display: flex;
+    flex-direction: column;
   }
 
   @media (max-width: 768px) {
@@ -475,6 +477,7 @@
       padding: 0.5rem 1rem;
       height: auto;
       min-height: 64px;
+      flex-shrink: 0;
     }
     
     .top-bar .text-sm {
@@ -535,22 +538,24 @@
       </div>
     </header>
 
-    <main class="flex flex-1 overflow-hidden relative">
+    <main class="flex flex-1 overflow-hidden relative bg-bg">
       <div class="sidebar-wrapper" class:hidden-mobile={!showSidebar}>
         <Sidebar {contacts} {version} selected={contact} on:select={(e)=>{ contact = e.detail.id; showSidebar = false; }} on:addContact={(e) => addContact(e.detail.id)} />
       </div>
-      <div class="chat-wrapper" class:hidden-mobile={showSidebar}>
-        <ChatWindow 
-          currentUserId={id} 
-          contactId={contact} 
-          messages={currentMessages} 
-          isTyping={contact ? !!typingMap[contact] : false}
-          on:send={(e)=>sendTo(e.detail.to, e.detail.text)} 
-          on:sendFile={(e)=>sendFile(e.detail.to, e.detail.fileData, e.detail.fileName, e.detail.fileType)}
-          on:typing={handleTyping}
-          on:back={() => { contact = null; showSidebar = true; }}
-        />
-      </div>
+      {#if contact}
+        <div class="chat-wrapper" class:hidden-mobile={showSidebar}>
+          <ChatWindow 
+            currentUserId={id} 
+            contactId={contact} 
+            messages={currentMessages} 
+            isTyping={contact ? !!typingMap[contact] : false}
+            on:send={(e)=>sendTo(e.detail.to, e.detail.text)} 
+            on:sendFile={(e)=>sendFile(e.detail.to, e.detail.fileData, e.detail.fileName, e.detail.fileType)}
+            on:typing={handleTyping}
+            on:back={() => { contact = null; showSidebar = true; }}
+          />
+        </div>
+      {/if}
     </main>
   {/if}
 </div>
