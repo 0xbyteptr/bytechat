@@ -86,13 +86,15 @@
         
         let msgObj: any = { from, text, ts: Date.now() }
         try {
-          const parsed = JSON.parse(text)
-          if (parsed && parsed.bytechat_file) {
-            msgObj.text = `Sent a file: ${parsed.fileName}`
-            msgObj.file = {
-              fileName: parsed.fileName,
-              fileType: parsed.fileType,
-              fileData: parsed.fileData
+          if (text.startsWith('{') && text.includes('bytechat_file')) {
+            const parsed = JSON.parse(text)
+            if (parsed && parsed.bytechat_file) {
+              msgObj.text = `Sent a file: ${parsed.fileName}`
+              msgObj.file = {
+                fileName: parsed.fileName,
+                fileType: parsed.fileType,
+                fileData: parsed.fileData
+              }
             }
           }
         } catch (e) {
@@ -277,9 +279,25 @@
   })
 
   $: if(isLoggedIn) {
-    localStorage.setItem('bytechat_session', JSON.stringify({
-      id, pgpPrivateKey, pgpPassphrase, keypair, keys, messagesMap, unreadMap
-    }))
+    try {
+      // To avoid QuotaExceededError, we strip large file data when saving to localStorage
+      // Users can still see them in the current session, but they won't persist if too large
+      const strippedMessages = { ...messagesMap }
+      Object.keys(strippedMessages).forEach(contactId => {
+        strippedMessages[contactId] = strippedMessages[contactId].map(m => {
+          if (m.file && m.file.fileData && m.file.fileData.length > 100000) {
+            return { ...m, file: { ...m.file, fileData: '' }, text: m.text + ' (File too large to persist)' }
+          }
+          return m
+        })
+      })
+
+      localStorage.setItem('bytechat_session', JSON.stringify({
+        id, pgpPrivateKey, pgpPassphrase, keypair, keys, messagesMap: strippedMessages, unreadMap
+      }))
+    } catch (e) {
+      console.warn('LocalStorage quota exceeded, session not fully saved', e)
+    }
   }
 
   // small mock contacts list for UI
