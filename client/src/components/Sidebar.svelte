@@ -3,6 +3,9 @@
   export let contacts: Array<{id:string, last:string, unread?:number}> = []
   export let selected: string | null = null
   export let version = ''
+  export let updateAvailable = false
+  export let updateUrl = ''
+  export let isUpdating = false
   const dispatch = createEventDispatcher()
   function pick(id:string) { dispatch('select', { id }) }
 
@@ -25,6 +28,14 @@
         </svg>
       </button>
     </div>
+    {#if updateAvailable}
+      <button class="update-banner" on:click={() => dispatch('update')} disabled={isUpdating}>
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+        </svg>
+        {isUpdating ? 'Downloading update...' : 'Update Available! Tap to install'}
+      </button>
+    {/if}
     <div class="add-contact">
       <div class="search-wrapper">
         <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -100,6 +111,39 @@
     padding-top: calc(1.5rem + env(safe-area-inset-top));
     padding-left: calc(1rem + env(safe-area-inset-left));
     padding-right: calc(1rem + env(safe-area-inset-right));
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .update-banner {
+    background: var(--accent);
+    color: var(--accent-fg);
+    padding: 0.75rem;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    text-decoration: none;
+    border: none;
+    width: 100%;
+    cursor: pointer;
+    animation: pulse 2s infinite;
+  }
+
+  .update-banner:disabled {
+    opacity: 0.7;
+    cursor: wait;
+    animation: none;
+  }
+
+  @keyframes pulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.02); }
+    100% { transform: scale(1); }
   }
 
   .brand {

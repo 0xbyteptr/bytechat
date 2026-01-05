@@ -10,6 +10,8 @@
   import { LocalNotifications } from '@capacitor/local-notifications'
   import { PushNotifications } from '@capacitor/push-notifications'
   import { Capacitor } from '@capacitor/core'
+  import { Filesystem, Directory } from '@capacitor/filesystem'
+  import { FileOpener } from '@capacitor-community/file-opener'
 
   const API_URL = import.meta.env.VITE_API_URL || (Capacitor.isNativePlatform() ? 'https://api.byteptr.xyz' : '')
   const version = pkg.version
@@ -38,6 +40,9 @@
   let isAppVisible = true
   let notificationPermission = 'default'
   let showSettings = false
+  let updateAvailable = false
+  let updateUrl = ''
+  let isUpdating = false
 
   function playPing() {
     try {
@@ -199,13 +204,19 @@
       const chatWith = msg.chatWith || from
       try {
         let senderPk = keys[from]
-        if (!senderPk) {
+        const fetchKey = async () => {
           const res = await fetch(`${API_URL}/keys?id=${encodeURIComponent(from)}`)
           if (res.ok) {
             const data = await res.json()
             senderPk = data.publicKey
             keys = { ...keys, [from]: senderPk }
+            return senderPk
           }
+          return null
+        }
+
+        if (!senderPk) {
+          senderPk = await fetchKey()
         }
 
         if (!senderPk) {
@@ -214,12 +225,38 @@
         }
         
         let text = ''
-        if (isPGP(pgpPrivateKey) && msg.cipher.includes('-----BEGIN PGP MESSAGE-----')) {
-          text = await decryptPGP(pgpPrivateKey, msg.cipher, pgpPassphrase) as string
-        } else if (keypair && !senderPk.includes('-----BEGIN PGP')) {
-          text = decrypt(keypair.secretKey, senderPk, msg.cipher, msg.nonce) || '<failed to decrypt>'
-        } else {
-          text = '<no key to decrypt or key mismatch>'
+        const attemptDecrypt = async (pk: string) => {
+          if (isPGP(pgpPrivateKey) && msg.cipher && msg.cipher.includes('-----BEGIN PGP MESSAGE-----')) {
+            try {
+              return await decryptPGP(pgpPrivateKey, msg.cipher, pgpPassphrase) as string
+            } catch (e) {
+              console.error('PGP decryption failed:', e)
+              return null
+            }
+          } else if (keypair && pk && !pk.includes('-----BEGIN PGP')) {
+            return decrypt(keypair.secretKey, pk, msg.cipher, msg.nonce)
+          }
+          return null
+        }
+
+        text = await attemptDecrypt(senderPk) || ''
+
+        // If decryption failed, try fetching the key again (it might have changed)
+        if (!text && msg.cipher && !msg.cipher.includes('typing')) {
+          const newPk = await fetchKey()
+          if (newPk && newPk !== senderPk) {
+            text = await attemptDecrypt(newPk) || ''
+          }
+        }
+
+        if (!text) {
+          if (msg.cipher && msg.cipher.includes('-----BEGIN PGP MESSAGE-----') && !isPGP(pgpPrivateKey)) {
+            text = '<received PGP message but you are using Nacl>'
+          } else if (msg.cipher && !msg.cipher.includes('-----BEGIN PGP MESSAGE-----') && isPGP(pgpPrivateKey) && !keypair) {
+            text = '<received Nacl message but you are using PGP>'
+          } else {
+            text = '<failed to decrypt message>'
+          }
         }
         
         let msgObj: any = { from, text, ts: msg.ts || Date.now() }
@@ -434,7 +471,57 @@
     contact = null
   }
 
+  async function checkForUpdates() {
+    try {
+      const res = await fetch('https://api.github.com/repos/0xbyteptr/bytechat/releases/latest')
+      if (res.ok) {
+        const data = await res.json()
+        const latestVersion = data.tag_name.replace('v', '')
+        if (latestVersion !== version) {
+          updateAvailable = true
+          const apkAsset = data.assets.find((a: any) => a.name.endsWith('.apk'))
+          updateUrl = apkAsset ? apkAsset.browser_download_url : data.html_url
+        }
+      }
+    } catch (e) {
+      console.warn('Update check failed', e)
+    }
+  }
+
+  async function installUpdate() {
+    if (!updateUrl || isUpdating) return
+    
+    if (!Capacitor.isNativePlatform() || !updateUrl.endsWith('.apk')) {
+      window.open(updateUrl, '_blank')
+      return
+    }
+
+    try {
+      isUpdating = true
+      const filename = `bytechat-${Date.now()}.apk`
+      
+      const download = await Filesystem.downloadFile({
+        url: updateUrl,
+        path: filename,
+        directory: Directory.Data
+      })
+
+      if (download.path) {
+        await FileOpener.open({
+          filePath: download.path,
+          contentType: 'application/vnd.android.package-archive'
+        })
+      }
+    } catch (e: any) {
+      console.error('Update failed', e)
+      alert('Update failed: ' + e.message)
+    } finally {
+      isUpdating = false
+    }
+  }
+
   onMount(()=>{
+    checkForUpdates()
     if ('Notification' in window) {
       notificationPermission = Notification.permission;
     }
@@ -674,7 +761,18 @@
   {:else}
     <main class="flex flex-1 overflow-hidden relative bg-bg">
       <div class="sidebar-wrapper" class:hidden-mobile={!showSidebar}>
-        <Sidebar {contacts} {version} selected={contact} on:select={(e)=>{ contact = e.detail.id; showSidebar = false; }} on:addContact={(e) => addContact(e.detail.id)} on:openSettings={() => showSettings = true} />
+        <Sidebar 
+          {contacts} 
+          {version} 
+          {updateAvailable} 
+          {updateUrl} 
+          {isUpdating}
+          selected={contact} 
+          on:select={(e)=>{ contact = e.detail.id; showSidebar = false; }} 
+          on:addContact={(e) => addContact(e.detail.id)} 
+          on:openSettings={() => showSettings = true} 
+          on:update={installUpdate}
+        />
       </div>
       {#if contact}
         <div class="chat-wrapper" class:hidden-mobile={showSidebar}>

@@ -9,7 +9,9 @@ const cleanBase64 = (s: string) => {
 
 // Robust base64 decoder that doesn't throw "invalid encoding" like tweetnacl-util
 function robustDecodeBase64(s: string): Uint8Array {
+  if (!s || typeof s !== 'string') return new Uint8Array(0)
   const cleaned = cleanBase64(s)
+  if (!cleaned) return new Uint8Array(0)
   try {
     // Use atob if available (browser/webview)
     if (typeof atob !== 'undefined') {
