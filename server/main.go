@@ -44,6 +44,8 @@ var (
 	historyMux    = sync.Mutex{}
 	clients       = make(map[string]*client) // id -> client
 	clientsMux    = sync.RWMutex{}
+	pushTokens    = make(map[string]string) // id -> fcmToken
+	pushTokensMux = sync.RWMutex{}
 	upgrader      = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool { return true },
 	}
