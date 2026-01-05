@@ -15,7 +15,7 @@
   let contact: string | null = null
   let keypair: {publicKey:string, secretKey:string} | null = null
   let keys: Record<string,string> = {}
-  let ws: WebSocket | null = null
+  let ws: { send: (d: string) => void, close: () => void, readyState: number } | null = null
   let wsStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
   interface Message {
     from: string;
@@ -63,7 +63,6 @@
 
   function connect() {
     if(!id) return
-    wsStatus = 'connecting'
     ws = connectWS(id, async (msg)=>{
       if (msg.type === 'typing') {
         typingMap = { ...typingMap, [msg.from]: msg.isTyping }
@@ -110,10 +109,9 @@
       } catch (e) {
         console.error('Failed to process message', e)
       }
+    }, (status) => {
+      wsStatus = status
     })
-    ws.addEventListener('open', () => { wsStatus = 'connected' })
-    ws.addEventListener('close', () => { wsStatus = 'disconnected' })
-    ws.addEventListener('error', () => { wsStatus = 'disconnected' })
   }
 
   async function fetchContactKey(name:string) {
