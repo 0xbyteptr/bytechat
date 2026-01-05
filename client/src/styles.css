@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root{
+  --cp-bg:#1e1e2e;
+  --cp-surface:#313244;
+  --cp-text:#cdd6f4;
+  --cp-mauve:#cba6f7;
+  --accent:#f5a97f;
+  --muted:#6c6f85;
+  --bubble: rgba(255,255,255,0.06);
+}
+
+body{background:var(--cp-bg); color:var(--cp-text); font-family:Inter,system-ui,Segoe UI,Roboto,Arial}
+
+/* small helpers */
+.break-all{word-break:break-all}
+.bg-surface{background:var(--cp-surface)}
+.text-muted{color:var(--muted)}

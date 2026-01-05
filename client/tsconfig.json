@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "types": ["svelte"],
+    "verbatimModuleSyntax": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM"]
+  },
+  "include": ["src/**/*", "src/node_modules.d.ts"],
+  "exclude": ["node_modules/*", "public/*"]
+}
