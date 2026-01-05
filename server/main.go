@@ -96,9 +96,22 @@ func (c *client) send(v interface{}) error {
 	return c.conn.WriteJSON(v)
 }
 
+func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next(w, r)
+	}
+}
+
 func main() {
-	http.HandleFunc("/challenge", challengeHandler)
-	http.HandleFunc("/keys", keysHandler) // POST to register, GET to fetch
+	http.HandleFunc("/challenge", corsMiddleware(challengeHandler))
+	http.HandleFunc("/keys", corsMiddleware(keysHandler)) // POST to register, GET to fetch
 	http.HandleFunc("/ws", wsHandler)
 
 	addr := ":8080"
