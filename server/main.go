@@ -82,6 +82,42 @@ func init() {
 
 	// Load existing keys
 	loadKeys()
+	loadPushTokens()
+}
+
+func loadPushTokens() {
+	content, err := os.ReadFile(filepath.Join(dataDir, "push_tokens.json"))
+	if err != nil {
+		return
+	}
+	pushTokensMux.Lock()
+	json.Unmarshal(content, &pushTokens)
+	pushTokensMux.Unlock()
+}
+
+func savePushToken(id, token string) {
+	pushTokensMux.Lock()
+	pushTokens[id] = token
+	data, _ := json.Marshal(pushTokens)
+	pushTokensMux.Unlock()
+	os.WriteFile(filepath.Join(dataDir, "push_tokens.json"), data, 0644)
+}
+
+func pushTokenHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		ID    string `json:"id"`
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	savePushToken(body.ID, body.Token)
+	w.WriteHeader(http.StatusOK)
 }
 
 func loadKeys() {
@@ -141,6 +177,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/challenge", challengeHandler)
 	mux.HandleFunc("/keys", keysHandler) // POST to register, GET to fetch
+	mux.HandleFunc("/push-token", pushTokenHandler)
 	mux.HandleFunc("/ws", wsHandler)
 
 	addr := ":8080"
@@ -436,10 +473,54 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 				log.Println("relay write error:", err)
 			}
 		} else {
-			// recipient offline — silent drop (no plaintext stored)
-			log.Printf("recipient %s offline; dropping message\n", to)
+			// recipient offline — send push notification
+			log.Printf("recipient %s offline; sending push notification\n", to)
+			sendPush(to, id)
 		}
 	}
+}
+
+func sendPush(to, from string) {
+	pushTokensMux.RLock()
+	token, ok := pushTokens[to]
+	pushTokensMux.RUnlock()
+	if !ok {
+		return
+	}
+
+	// FCM Legacy API (simpler for this example, though deprecated)
+	// In a real app, use FCM v1 with service account
+	serverKey := os.Getenv("FCM_SERVER_KEY")
+	if serverKey == "" {
+		log.Println("FCM_SERVER_KEY not set, skipping push")
+		return
+	}
+
+	payload := map[string]interface{}{
+		"to": token,
+		"notification": map[string]string{
+			"title": "New message",
+			"body":  fmt.Sprintf("You have a new message from %s", from),
+			"sound": "default",
+		},
+		"data": map[string]string{
+			"from": from,
+		},
+	}
+
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", "https://fcm.googleapis.com/fcm/send", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "key="+serverKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Error sending push: %v\n", err)
+		return
+	}
+	defer resp.Body.Close()
+	log.Printf("Push sent to %s, status: %s\n", to, resp.Status)
 }
 
 func jsonTime(v interface{}) int64 {

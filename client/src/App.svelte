@@ -8,6 +8,7 @@
   import Auth from './components/Auth.svelte'
   import pkg from '../package.json'
   import { LocalNotifications } from '@capacitor/local-notifications'
+  import { PushNotifications } from '@capacitor/push-notifications'
   import { Capacitor } from '@capacitor/core'
 
   const API_URL = import.meta.env.VITE_API_URL || (Capacitor.isNativePlatform() ? 'https://api.byteptr.xyz' : '')
@@ -130,6 +131,45 @@
     return key && key.includes('-----BEGIN PGP')
   }
 
+  async function registerPush() {
+    if (!Capacitor.isNativePlatform()) return
+
+    let perm = await PushNotifications.checkPermissions()
+    if (perm.receive !== 'granted') {
+      perm = await PushNotifications.requestPermissions()
+    }
+
+    if (perm.receive !== 'granted') return
+
+    await PushNotifications.register()
+
+    PushNotifications.addListener('registration', async (token) => {
+      console.log('Push registration success, token: ' + token.value)
+      await fetch(`${API_URL}/push-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, token: token.value })
+      })
+    })
+
+    PushNotifications.addListener('registrationError', (error: any) => {
+      console.error('Error on registration: ' + JSON.stringify(error))
+    })
+
+    PushNotifications.addListener('pushNotificationReceived', (notification) => {
+      console.log('Push received: ' + JSON.stringify(notification))
+    })
+
+    PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
+      console.log('Push action performed: ' + JSON.stringify(notification))
+      const from = notification.notification.data.from
+      if (from) {
+        contact = from
+        showSidebar = false
+      }
+    })
+  }
+
   function handleAuthSuccess(e: any) {
     const data = e.detail
     id = data.id
@@ -144,6 +184,7 @@
     isLoggedIn = true
     showSidebar = true
     connect()
+    registerPush()
   }
 
   function connect() {
