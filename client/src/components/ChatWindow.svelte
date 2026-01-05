@@ -15,6 +15,9 @@
   const MAX_FILE_SIZE = parseInt(import.meta.env.VITE_MAX_FILE_SIZE || '52428800')
   let draft = ''
   let fileInput: HTMLInputElement
+  let uploadProgress = 0
+  let isUploading = false
+  let uploadName = ''
 
   function send() { if(!contactId || !draft) return; dispatch('send', { to: contactId, text: draft }); draft = '' }
   
@@ -27,14 +30,32 @@
       return
     }
 
+    isUploading = true
+    uploadProgress = 0
+    uploadName = file.name
+
     const reader = new FileReader()
+    reader.onprogress = (ev) => {
+      if (ev.lengthComputable) {
+        uploadProgress = Math.round((ev.loaded / ev.total) * 100)
+      }
+    }
     reader.onload = () => {
-      dispatch('sendFile', { 
-        to: contactId, 
-        fileData: reader.result, 
-        fileName: file.name,
-        fileType: file.type 
-      })
+      uploadProgress = 100
+      setTimeout(() => {
+        dispatch('sendFile', { 
+          to: contactId, 
+          fileData: reader.result, 
+          fileName: file.name,
+          fileType: file.type 
+        })
+        isUploading = false
+        uploadProgress = 0
+      }, 300)
+    }
+    reader.onerror = () => {
+      alert('Failed to read file')
+      isUploading = false
     }
     reader.readAsDataURL(file)
     fileInput.value = ''
@@ -106,6 +127,18 @@
         {/each}
       </div>
     </div>
+
+    {#if isUploading}
+      <div class="upload-progress-container">
+        <div class="upload-info">
+          <span class="upload-name">Sending {uploadName}...</span>
+          <span class="upload-percent">{uploadProgress}%</span>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" style="width: {uploadProgress}%"></div>
+        </div>
+      </div>
+    {/if}
 
     <footer class="chat-footer">
       <div class="input-container">
@@ -259,6 +292,43 @@
     max-width: 900px;
     margin: 0 auto;
     width: 100%;
+  }
+
+  .upload-progress-container {
+    padding: 0.75rem 1rem;
+    background: var(--surface);
+    border-top: 1px solid var(--surface-lighter);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .upload-info {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--fg);
+  }
+
+  .upload-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 80%;
+  }
+
+  .progress-bar-bg {
+    height: 6px;
+    background: var(--bg);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .progress-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.2s ease-out;
   }
 
   .chat-footer {
