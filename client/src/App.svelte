@@ -26,7 +26,7 @@
     from: string;
     text: string;
     ts?: number;
-    file?: { fileName: string; fileType: string; fileData: string };
+    file?: { fileName: string; fileType: string; fileData?: string; fileUrl?: string };
   }
   let messagesMap: Record<string, Array<Message>> = {}
   let unreadMap: Record<string, number> = {}
@@ -37,6 +37,7 @@
   let showSidebar = true
   let isAppVisible = true
   let notificationPermission = 'default'
+  let showSettings = false
 
   function playPing() {
     try {
@@ -230,7 +231,8 @@
               msgObj.file = {
                 fileName: parsed.fileName,
                 fileType: parsed.fileType,
-                fileData: parsed.fileData
+                fileData: parsed.fileData,
+                fileUrl: parsed.fileUrl
               }
             }
           }
@@ -306,6 +308,29 @@
 
   async function sendFile(to: string, fileData: string, fileName: string, fileType: string) {
     if(!ws || ws.readyState !== WebSocket.OPEN) return
+
+    // Upload to CDN
+    let fileUrl = ''
+    try {
+      const blob = await (await fetch(fileData)).blob()
+      const formData = new FormData()
+      formData.append('file', blob, fileName)
+      
+      const uploadRes = await fetch(`${API_URL}/cdn/upload`, {
+        method: 'POST',
+        body: formData
+      })
+      
+      if (uploadRes.ok) {
+        const data = await uploadRes.json()
+        fileUrl = data.url
+      } else {
+        console.error('CDN upload failed')
+      }
+    } catch (e) {
+      console.error('Error uploading to CDN:', e)
+    }
+
     await fetchContactKey(to)
     const pk = keys[to]
     if(!pk) return
@@ -314,7 +339,8 @@
       bytechat_file: true,
       fileName,
       fileType,
-      fileData
+      fileData: fileUrl ? undefined : fileData, // Fallback to base64 if CDN failed
+      fileUrl
     })
 
     let payload: any = { to }
@@ -330,7 +356,7 @@
     ws.send(JSON.stringify(payload))
     messagesMap = {
       ...messagesMap,
-      [to]: [...(messagesMap[to]||[]), { from: id, text: `Sent file: ${fileName}`, file: { fileName, fileType, fileData }, ts: Date.now() }].sort((a, b) => (a.ts || 0) - (b.ts || 0))
+      [to]: [...(messagesMap[to]||[]), { from: id, text: `Sent file: ${fileName}`, file: { fileName, fileType, fileData, fileUrl }, ts: Date.now() }].sort((a, b) => (a.ts || 0) - (b.ts || 0))
     }
   }
 
@@ -523,6 +549,7 @@
     flex-shrink: 0;
     transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     background: var(--surface);
+    padding-left: env(safe-area-inset-left);
   }
 
   .chat-wrapper {
@@ -532,19 +559,92 @@
     background: var(--bg);
     display: flex;
     flex-direction: column;
+    padding-right: env(safe-area-inset-right);
+  }
+
+  .modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+  }
+
+  .modal-content {
+    background: var(--surface);
+    border: 1px solid var(--surface-lighter);
+    border-radius: 24px;
+    width: 100%;
+    max-width: 450px;
+    padding: 2rem;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .modal-title {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--accent);
+  }
+
+  .close-btn {
+    background: none;
+    border: none;
+    color: var(--subtext);
+    cursor: pointer;
+    padding: 0.5rem;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+  }
+
+  .close-btn:hover {
+    color: var(--fg);
+    background: var(--surface-lighter);
+  }
+
+  .settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .settings-label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--subtext);
+  }
+
+  .settings-item {
+    background: var(--bg);
+    border: 1px solid var(--surface-lighter);
+    border-radius: 12px;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
   }
 
   @media (max-width: 768px) {
-    .top-bar {
-      padding: 0.5rem 1rem;
-      height: auto;
-      min-height: 64px;
-      flex-shrink: 0;
-    }
-    
-    .top-bar .text-sm {
-      display: none;
-    }
 
     .sidebar-wrapper {
       width: 100%;
@@ -572,37 +672,9 @@
   {#if !isLoggedIn}
     <Auth {id} {pgpPrivateKey} {pgpPassphrase} {keypair} on:authSuccess={handleAuthSuccess} />
   {:else}
-    <header class="top-bar">
-      <div class="flex justify-between items-center w-full">
-        <div class="flex items-center gap-3 sm:gap-4">
-          <span class="text-xl font-bold tracking-tight text-accent">ByteChat</span>
-          <div class="status-indicator hidden sm:flex">
-            <div class="dot {wsStatus}"></div>
-            <span class="opacity-50">{wsStatus}</span>
-          </div>
-        </div>
-        <div class="flex items-center gap-2 sm:gap-4">
-          <div class="text-sm hidden md:block">
-            <span class="opacity-50">Logged in as:</span>
-            <span class="font-bold text-accent">{id}</span>
-          </div>
-          <div class="flex gap-2">
-            {#if notificationPermission !== 'granted'}
-              <button class="btn-secondary text-xs py-1.5 px-3 rounded-lg flex items-center gap-1" on:click={requestNotificationPermission} title="Enable Notifications">
-                <span class="hidden sm:inline">Enable Notifications</span>
-                <span class="sm:hidden">🔔</span>
-              </button>
-            {/if}
-            <button class="btn-secondary text-xs py-1.5 px-3 rounded-lg" on:click={exportKeys}>Export</button>
-            <button class="btn-secondary text-xs py-1.5 px-3 rounded-lg" on:click={logout}>Logout</button>
-          </div>
-        </div>
-      </div>
-    </header>
-
     <main class="flex flex-1 overflow-hidden relative bg-bg">
       <div class="sidebar-wrapper" class:hidden-mobile={!showSidebar}>
-        <Sidebar {contacts} {version} selected={contact} on:select={(e)=>{ contact = e.detail.id; showSidebar = false; }} on:addContact={(e) => addContact(e.detail.id)} />
+        <Sidebar {contacts} {version} selected={contact} on:select={(e)=>{ contact = e.detail.id; showSidebar = false; }} on:addContact={(e) => addContact(e.detail.id)} on:openSettings={() => showSettings = true} />
       </div>
       {#if contact}
         <div class="chat-wrapper" class:hidden-mobile={showSidebar}>
@@ -619,5 +691,79 @@
         </div>
       {/if}
     </main>
+
+    {#if showSettings}
+      <div 
+        class="modal-overlay" 
+        on:click|self={() => showSettings = false} 
+        on:keydown={(e) => e.key === 'Escape' && (showSettings = false)}
+        role="button"
+        tabindex="-1"
+      >
+        <div class="modal-content">
+          <header class="modal-header">
+            <h2 class="modal-title">Settings</h2>
+            <button class="close-btn" on:click={() => showSettings = false}>
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </header>
+
+          <div class="settings-section">
+            <span class="settings-label">Account</span>
+            <div class="settings-item">
+              <div class="flex justify-between items-center">
+                <span class="opacity-50 text-sm">Logged in as</span>
+                <span class="font-bold text-accent">{id}</span>
+              </div>
+              <div class="flex justify-between items-center mt-2">
+                <span class="opacity-50 text-sm">Status</span>
+                <div class="status-indicator">
+                  <div class="dot {wsStatus}"></div>
+                  <span class="opacity-50">{wsStatus}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <span class="settings-label">Notifications</span>
+            <div class="settings-item">
+              <div class="flex justify-between items-center">
+                <span class="text-sm">Push Notifications</span>
+                {#if notificationPermission === 'granted'}
+                  <span class="text-green text-xs font-bold uppercase">Enabled</span>
+                {:else}
+                  <button class="btn-secondary text-xs py-1 px-3 rounded-lg" on:click={requestNotificationPermission}>Enable</button>
+                {/if}
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <span class="settings-label">Data & Security</span>
+            <div class="flex flex-col gap-2">
+              <button class="btn-secondary w-full py-3 rounded-xl flex items-center justify-center gap-2" on:click={exportKeys}>
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                </svg>
+                Export Keys
+              </button>
+              <button class="btn-secondary w-full py-3 rounded-xl text-red flex items-center justify-center gap-2" on:click={logout}>
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
+                </svg>
+                Logout
+              </button>
+            </div>
+          </div>
+
+          <div class="mt-auto pt-4 text-center opacity-30 text-[10px] font-mono">
+            ByteChat v{version}
+          </div>
+        </div>
+      </div>
+    {/if}
   {/if}
 </div>

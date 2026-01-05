@@ -7,7 +7,7 @@
     from: string;
     text: string;
     ts?: number;
-    file?: { fileName: string; fileType: string; fileData: string };
+    file?: { fileName: string; fileType: string; fileData?: string; fileUrl?: string };
   }
   export let messages: Array<Message> = []
   export let isTyping = false
@@ -194,7 +194,10 @@
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    height: 64px;
+    height: calc(64px + env(safe-area-inset-top));
+    padding-top: calc(0.75rem + env(safe-area-inset-top));
+    padding-left: calc(1rem + env(safe-area-inset-left));
+    padding-right: calc(1rem + env(safe-area-inset-right));
     flex-shrink: 0;
     z-index: 10;
   }
@@ -339,6 +342,8 @@
     background: var(--bg);
     border-top: 1px solid var(--surface-lighter);
     padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+    padding-left: calc(0.75rem + env(safe-area-inset-left));
+    padding-right: calc(0.75rem + env(safe-area-inset-right));
   }
 
   .input-container {

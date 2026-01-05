@@ -215,12 +215,17 @@
 <style>
   .auth-container {
     height: 100vh;
+    height: 100dvh;
     width: 100vw;
     display: flex;
     align-items: center;
     justify-content: center;
     background: var(--bg);
     padding: 1rem;
+    padding-top: calc(1rem + env(safe-area-inset-top));
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+    padding-left: calc(1rem + env(safe-area-inset-left));
+    padding-right: calc(1rem + env(safe-area-inset-right));
   }
 
   .auth-card {

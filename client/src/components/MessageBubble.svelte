@@ -3,7 +3,7 @@
     from: string; 
     text: string; 
     ts?: number;
-    file?: { fileName: string; fileType: string; fileData: string }
+    file?: { fileName: string; fileType: string; fileData?: string; fileUrl?: string }
   }
   export let isOwn = false
 
@@ -23,7 +23,7 @@
     {#if msg.file}
       <div class="file-attachment">
         {#if isImage(msg.file.fileType)}
-          <img src={msg.file.fileData} alt={msg.file.fileName} class="attached-image" />
+          <img src={msg.file.fileUrl || msg.file.fileData} alt={msg.file.fileName} class="attached-image" />
         {:else}
           <div class="file-icon">
             <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
@@ -34,7 +34,9 @@
         {/if}
         <div class="file-info">
           <span class="file-name">{msg.file.fileName}</span>
-          <a href={msg.file.fileData} download={msg.file.fileName} class="download-link">Download</a>
+          <a href={msg.file.fileUrl || msg.file.fileData} target="_blank" rel="noopener noreferrer" download={msg.file.fileName} class="download-link">
+            {msg.file.fileUrl ? 'Open Link' : 'Download'}
+          </a>
         </div>
       </div>
     {:else}

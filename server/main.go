@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -23,6 +25,7 @@ import (
 
 const dataDir = "data"
 const historyDir = "data/history"
+const cdnDir = "data/cdn"
 
 type challengeData struct {
 	Code      string
@@ -77,6 +80,9 @@ func init() {
 		log.Fatal(err)
 	}
 	if err := os.MkdirAll(historyDir, 0755); err != nil {
+		log.Fatal(err)
+	}
+	if err := os.MkdirAll(cdnDir, 0755); err != nil {
 		log.Fatal(err)
 	}
 
@@ -178,6 +184,8 @@ func main() {
 	mux.HandleFunc("/challenge", challengeHandler)
 	mux.HandleFunc("/keys", keysHandler) // POST to register, GET to fetch
 	mux.HandleFunc("/push-token", pushTokenHandler)
+	mux.HandleFunc("/cdn/upload", uploadHandler)
+	mux.HandleFunc("/cdn/file/", downloadHandler)
 	mux.HandleFunc("/ws", wsHandler)
 
 	addr := ":8080"
@@ -567,4 +575,69 @@ func getHistory(id string) []StoredMessage {
 		}
 	}
 	return history
+}
+
+func uploadHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxFileSize)
+	if err := r.ParseMultipartForm(maxFileSize); err != nil {
+		http.Error(w, "File too large or invalid form", http.StatusBadRequest)
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "Invalid file", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	content, err := io.ReadAll(file)
+	if err != nil {
+		http.Error(w, "Read error", http.StatusInternalServerError)
+		return
+	}
+
+	hash := fmt.Sprintf("%x", sha256.Sum256(content))
+	ext := filepath.Ext(header.Filename)
+	fileName := hash + ext
+	filePath := filepath.Join(cdnDir, fileName)
+
+	if err := os.WriteFile(filePath, content, 0644); err != nil {
+		http.Error(w, "Save error", http.StatusInternalServerError)
+		return
+	}
+
+	scheme := "http"
+	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+		scheme = "https"
+	}
+	url := fmt.Sprintf("%s://%s/cdn/file/%s", scheme, r.Host, fileName)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"url":      url,
+		"fileName": fileName,
+		"hash":     hash,
+	})
+}
+
+func downloadHandler(w http.ResponseWriter, r *http.Request) {
+	fileName := strings.TrimPrefix(r.URL.Path, "/cdn/file/")
+	if fileName == "" {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+
+	filePath := filepath.Join(cdnDir, fileName)
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+
+	http.ServeFile(w, r, filePath)
 }

@@ -18,7 +18,12 @@
   <div class="sidebar-header">
     <div class="flex items-center justify-between mb-4">
       <h2 class="brand">Messages</h2>
-      <div class="text-xs font-bold uppercase tracking-wider opacity-50">E2EE</div>
+      <button class="settings-btn" on:click={() => dispatch('openSettings')} title="Settings">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M12.22 2h-.44a2 2 0 0 0-2 2 2 2 0 0 1-2 2 2 2 0 0 1-2-2 2 2 0 0 0-2-2h-.44a2 2 0 0 0-2 2 2 2 0 0 0 2 2 2 2 0 0 1 2 2 2 2 0 0 1-2 2 2 2 0 0 0-2 2v.44a2 2 0 0 0 2 2 2 2 0 0 1 2 2 2 2 0 0 1-2 2 2 2 0 0 0-2 2v.44a2 2 0 0 0 2 2 2 2 0 0 0 2-2 2 2 0 0 1 2-2 2 2 0 0 1 2 2 2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2 2 2 0 0 0-2-2 2 2 0 0 1-2-2 2 2 0 0 1 2-2 2 2 0 0 0 2-2v-.44a2 2 0 0 0-2-2 2 2 0 0 1-2-2 2 2 0 0 1 2-2 2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+      </button>
     </div>
     <div class="add-contact">
       <div class="search-wrapper">
@@ -92,6 +97,9 @@
 
   .sidebar-header {
     padding: 1.5rem 1rem 1rem;
+    padding-top: calc(1.5rem + env(safe-area-inset-top));
+    padding-left: calc(1rem + env(safe-area-inset-left));
+    padding-right: calc(1rem + env(safe-area-inset-right));
   }
 
   .brand {
@@ -99,6 +107,24 @@
     font-weight: 800;
     color: var(--fg);
     letter-spacing: -0.02em;
+  }
+
+  .settings-btn {
+    background: none;
+    border: none;
+    color: var(--subtext);
+    cursor: pointer;
+    padding: 0.5rem;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+  }
+
+  .settings-btn:hover {
+    color: var(--accent);
+    background: var(--surface-lighter);
   }
 
   .add-contact {
@@ -267,5 +293,8 @@
     font-weight: 600;
     display: flex;
     justify-content: center;
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+    padding-left: calc(1rem + env(safe-area-inset-left));
+    padding-right: calc(1rem + env(safe-area-inset-right));
   }
 </style>
