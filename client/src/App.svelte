@@ -7,6 +7,8 @@
   import ChatWindow from './components/ChatWindow.svelte'
   import Auth from './components/Auth.svelte'
 
+  const API_URL = import.meta.env.VITE_API_URL || ''
+
   let id = ''
   let pgpPrivateKey = ''
   let pgpPassphrase = ''
@@ -69,7 +71,7 @@
       }
       const from = msg.from
       try {
-        const senderPk = keys[from] ?? (await fetch(`/keys?id=${encodeURIComponent(from)}`).then(r=>r.json()).then(j=>j.publicKey))
+        const senderPk = keys[from] ?? (await fetch(`${API_URL}/keys?id=${encodeURIComponent(from)}`).then(r=>r.json()).then(j=>j.publicKey))
         if (!keys[from]) {
           keys = { ...keys, [from]: senderPk }
         }
@@ -116,7 +118,7 @@
 
   async function fetchContactKey(name:string) {
     if(!name) return
-    const res = await fetch(`/keys?id=${encodeURIComponent(name)}`)
+    const res = await fetch(`${API_URL}/keys?id=${encodeURIComponent(name)}`)
     if(res.ok) {
       keys = { ...keys, [name]: (await res.json()).publicKey }
     }
@@ -204,7 +206,7 @@
     }
     
     try {
-      const res = await fetch(`/keys?id=${encodeURIComponent(targetId)}`)
+      const res = await fetch(`${API_URL}/keys?id=${encodeURIComponent(targetId)}`)
       if (res.ok) {
         const data = await res.json()
         keys = { ...keys, [targetId]: data.publicKey }
@@ -327,21 +329,6 @@
     gap: 0.75rem;
     border-bottom: 1px solid var(--surface-lighter);
     background: var(--surface);
-  }
-
-  input, textarea {
-    background: var(--surface-lighter);
-    border: 1px solid transparent;
-    color: var(--fg);
-    padding: 0.5rem 0.75rem;
-    border-radius: 8px;
-    font-size: 0.875rem;
-    transition: border-color 0.2s;
-  }
-
-  input:focus, textarea:focus {
-    outline: none;
-    border-color: var(--accent);
   }
 
   button {

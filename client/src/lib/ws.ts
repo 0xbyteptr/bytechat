@@ -1,6 +1,6 @@
 export function connectWS(id: string, onMessage: (m: any)=>void) {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const url = `${protocol}//${window.location.host}/ws?id=${encodeURIComponent(id)}`
+  const baseUrl = import.meta.env.VITE_WS_URL || (window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + window.location.host
+  const url = `${baseUrl}/ws?id=${encodeURIComponent(id)}`
   const ws = new WebSocket(url)
   
   ws.addEventListener('open', () => console.log('ws open'))

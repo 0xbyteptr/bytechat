@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "types": ["svelte"],
+    "types": ["svelte", "vite/client"],
     "verbatimModuleSyntax": true,
     "module": "ESNext",
     "moduleResolution": "bundler",

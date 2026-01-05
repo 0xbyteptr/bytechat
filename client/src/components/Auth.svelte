@@ -4,6 +4,7 @@
   import { getPublicKeyFromPrivate, decryptPGP } from '../lib/pgp'
 
   const dispatch = createEventDispatcher()
+  const API_URL = import.meta.env.VITE_API_URL || ''
 
   export let id = ''
   export let pgpPrivateKey = ''
@@ -22,7 +23,7 @@
     loading = true
     try {
       const pubKey = await getPublicKeyFromPrivate(pgpPrivateKey)
-      const resChallenge = await fetch('/challenge', {
+      const resChallenge = await fetch(`${API_URL}/challenge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, publicKey: pubKey })
@@ -30,7 +31,7 @@
       if (!resChallenge.ok) throw new Error(await resChallenge.text())
       const { encryptedChallenge } = await resChallenge.json()
       const code = await decryptPGP(pgpPrivateKey, encryptedChallenge, pgpPassphrase) as string
-      const res = await fetch('/keys', {
+      const res = await fetch(`${API_URL}/keys`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, code })
@@ -56,11 +57,11 @@
     try {
       // In tweetnacl, we can't easily get public key from secret key without the full keypair object
       // but we can just try to fetch the public key from the server first if it exists
-      const resKey = await fetch(`/keys?id=${encodeURIComponent(id)}`)
+      const resKey = await fetch(`${API_URL}/keys?id=${encodeURIComponent(id)}`)
       if (!resKey.ok) throw new Error("User not found. Please register first.")
       const { publicKey: pubKey } = await resKey.json()
 
-      const resChallenge = await fetch('/challenge', {
+      const resChallenge = await fetch(`${API_URL}/challenge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, publicKey: pubKey })
@@ -73,7 +74,7 @@
       
       if (!code) throw new Error("Failed to decrypt challenge. Check your secret key.")
 
-      const res = await fetch('/keys', {
+      const res = await fetch(`${API_URL}/keys`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, code })
@@ -97,7 +98,7 @@
     }
     loading = true
     try {
-      const res = await fetch('/keys', { 
+      const res = await fetch(`${API_URL}/keys`, { 
         method: 'POST', 
         headers: {'Content-Type':'application/json'}, 
         body: JSON.stringify({id, publicKey: keypair.publicKey}) 
