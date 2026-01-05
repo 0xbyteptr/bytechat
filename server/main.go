@@ -166,8 +166,12 @@ func (c *client) send(v interface{}) error {
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
+	allowedOrigin := os.Getenv("ALLOWED_ORIGIN")
+	if allowedOrigin == "" {
+		allowedOrigin = "*"
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
 		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
 
@@ -181,6 +185,10 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 func main() {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
 	mux.HandleFunc("/challenge", challengeHandler)
 	mux.HandleFunc("/keys", keysHandler) // POST to register, GET to fetch
 	mux.HandleFunc("/push-token", pushTokenHandler)
@@ -188,9 +196,25 @@ func main() {
 	mux.HandleFunc("/cdn/file/", downloadHandler)
 	mux.HandleFunc("/ws", wsHandler)
 
-	addr := ":8080"
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	addr := ":" + port
+
+	handler := corsMiddleware(mux)
+	handler = loggingMiddleware(handler)
+
 	fmt.Printf("ByteChat server starting on %s (Max File Size: %d MB)\n", addr, maxFileSize/1024/1024)
-	log.Fatal(http.ListenAndServe(addr, corsMiddleware(mux)))
+	log.Fatal(http.ListenAndServe(addr, handler))
+}
+
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		log.Printf("%s %s %s", r.Method, r.RequestURI, time.Since(start))
+	})
 }
 
 func isPGP(key string) bool {

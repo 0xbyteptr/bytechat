@@ -24,6 +24,8 @@ export default defineConfig(async () => {
       proxy: {
         '/keys': 'http://localhost:8080',
         '/challenge': 'http://localhost:8080',
+        '/push-token': 'http://localhost:8080',
+        '/cdn': 'http://localhost:8080',
         '/ws': {
           target: 'ws://localhost:8080',
           ws: true
