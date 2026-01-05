@@ -179,7 +179,7 @@
               <code class="truncate">{keypair.publicKey}</code>
             </div>
           {:else}
-            <p class="text-muted text-sm">Generate a new Nacl keypair to register.</p>
+            <p class="opacity-50 text-sm">Generate a new Nacl keypair to register.</p>
           {/if}
           <button class="btn-secondary w-full mb-2" on:click={newKeypair}>Generate New Keypair</button>
           {#if keypair}
@@ -244,50 +244,57 @@
   }
 
   .subtitle {
-    color: var(--muted);
+    color: var(--fg);
+    opacity: 0.5;
     font-size: 0.9375rem;
   }
 
   .tabs {
     display: flex;
     background: var(--bg);
-    padding: 0.25rem;
-    border-radius: 12px;
+    padding: 0.35rem;
+    border-radius: 14px;
     margin-bottom: 2rem;
+    gap: 0.25rem;
   }
 
   .tabs button {
     flex: 1;
-    padding: 0.625rem;
+    padding: 0.75rem;
     border-radius: 10px;
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: var(--muted);
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--fg);
+    opacity: 0.5;
     transition: all 0.2s;
+    border: none;
+    background: transparent;
+    cursor: pointer;
   }
 
   .tabs button.active {
     background: var(--surface-lighter);
     color: var(--fg);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    opacity: 1;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
   }
 
   .form {
     display: flex;
     flex-direction: column;
-    gap: 1.25rem;
+    gap: 1.5rem;
   }
 
   .input-group {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 0.6rem;
   }
 
   .input-group label {
-    font-size: 0.8125rem;
-    font-weight: 600;
-    color: var(--muted);
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--fg);
     margin-left: 0.25rem;
   }
 
@@ -296,65 +303,94 @@
     background: var(--bg);
     border: 1px solid var(--surface-lighter);
     border-radius: 12px;
-    padding: 0.75rem 1rem;
+    padding: 0.85rem 1rem;
     color: var(--fg);
-    font-size: 0.9375rem;
+    font-size: 0.95rem;
+    transition: border-color 0.2s, box-shadow 0.2s;
   }
 
   input:focus, textarea:focus {
     outline: none;
     border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(203, 166, 247, 0.1);
   }
 
   .nacl-box {
     background: var(--bg);
     border: 1px solid var(--surface-lighter);
-    border-radius: 12px;
-    padding: 1rem;
+    border-radius: 14px;
+    padding: 1.25rem;
     margin-bottom: 0.5rem;
   }
 
   .key-info {
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
-    margin-bottom: 1rem;
+    gap: 0.4rem;
+    margin-bottom: 1.25rem;
   }
 
   .key-info .label {
     font-size: 0.75rem;
-    color: var(--muted);
+    font-weight: 700;
+    color: var(--fg);
+    opacity: 0.5;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
 
   .key-info code {
     font-size: 0.75rem;
-    background: rgba(0,0,0,0.3);
-    padding: 0.5rem;
-    border-radius: 6px;
+    background: rgba(0,0,0,0.2);
+    padding: 0.75rem;
+    border-radius: 8px;
     color: var(--accent);
+    word-break: break-all;
+    font-family: 'JetBrains Mono', monospace;
+    border: 1px solid rgba(255,255,255,0.05);
   }
 
   .btn-primary, .btn-purple, .btn-secondary {
     width: 100%;
-    padding: 0.875rem;
+    padding: 1rem;
     border-radius: 12px;
-    font-weight: 700;
+    font-weight: 800;
     font-size: 1rem;
     cursor: pointer;
-    transition: transform 0.1s, opacity 0.2s;
+    transition: all 0.2s;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
   }
 
-  .btn-primary { background: var(--accent); color: var(--accent-fg); }
-  .btn-purple { background: #cba6f7; color: var(--accent-fg); }
+  .btn-primary { background: var(--accent); color: var(--bg); }
+  .btn-purple { background: #cba6f7; color: var(--bg); }
   .btn-secondary { background: var(--surface-lighter); color: var(--fg); }
 
-  .btn-primary:hover, .btn-purple:hover { opacity: 0.9; }
-  .btn-primary:active, .btn-purple:active { transform: scale(0.98); }
+  .btn-primary:hover, .btn-purple:hover { 
+    opacity: 0.9;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(203, 166, 247, 0.2);
+  }
+
+  .btn-primary:active, .btn-purple:active { transform: translateY(0); }
+
+  .btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+  }
 
   .auth-footer {
-    margin-top: 2rem;
+    margin-top: 2.5rem;
     text-align: center;
     font-size: 0.75rem;
-    color: var(--muted);
+    color: var(--fg);
+    opacity: 0.5;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
 </style>

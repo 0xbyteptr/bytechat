@@ -53,29 +53,61 @@
   .message-row {
     display: flex;
     margin-bottom: 0.25rem;
+    width: 100%;
+  }
+
+  .message-row.is-own {
+    justify-content: flex-end;
   }
 
   .bubble {
-    max-width: 75%;
-    padding: 0.625rem 0.875rem;
-    border-radius: 18px;
+    max-width: 80%;
+    padding: 0.6rem 0.8rem;
+    border-radius: 16px;
     position: relative;
-    font-size: 0.9375rem;
-    line-height: 1.4;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+    font-size: 0.95rem;
+    line-height: 1.5;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    word-break: break-word;
+  }
+
+  @media (max-width: 480px) {
+    .bubble {
+      max-width: 90%;
+    }
+  }
+
+  .message-row:not(.is-own) .bubble {
+    background: var(--surface);
+    color: var(--fg);
+    border-bottom-left-radius: 4px;
+  }
+
+  .message-row.is-own .bubble {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border-bottom-right-radius: 4px;
   }
 
   .file-attachment {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    min-width: 150px;
+    min-width: 200px;
+  }
+
+  @media (max-width: 480px) {
+    .file-attachment {
+      min-width: 150px;
+    }
   }
 
   .attached-image {
     max-width: 100%;
-    border-radius: 8px;
+    max-height: 300px;
+    border-radius: 12px;
     display: block;
+    object-fit: cover;
   }
 
   .file-info {
@@ -83,14 +115,18 @@
     justify-content: space-between;
     align-items: center;
     gap: 1rem;
-    font-size: 0.8125rem;
-    background: rgba(0,0,0,0.05);
-    padding: 0.375rem 0.625rem;
-    border-radius: 8px;
+    font-size: 0.8rem;
+    background: rgba(0,0,0,0.1);
+    padding: 0.5rem 0.75rem;
+    border-radius: 10px;
+  }
+
+  .message-row.is-own .file-info {
+    background: rgba(255,255,255,0.15);
   }
 
   .file-name {
-    font-weight: 600;
+    font-weight: 700;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -98,45 +134,38 @@
 
   .download-link {
     color: var(--accent);
+    font-weight: 800;
     text-decoration: none;
-    font-weight: 700;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
   }
 
-  .download-link:hover {
+  .message-row.is-own .download-link {
+    color: white;
     text-decoration: underline;
   }
 
-  .message-row:not(.is-own) .bubble {
-    background: var(--surface-lighter);
-    color: var(--fg);
-    border-bottom-left-radius: 4px;
-  }
-
-  .is-own {
-    justify-content: flex-end;
-  }
-
-  .is-own .bubble {
-    background: var(--accent);
-    color: var(--accent-fg);
-    border-bottom-right-radius: 4px;
+  .text {
+    white-space: pre-wrap;
   }
 
   .meta {
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    gap: 0.25rem;
+    gap: 0.35rem;
     margin-top: 0.25rem;
-    font-size: 0.6875rem;
+    font-size: 0.7rem;
     opacity: 0.7;
+    font-weight: 600;
   }
 
-  .is-own .meta {
-    color: var(--accent-fg);
+  .time {
+    font-variant-numeric: tabular-nums;
   }
 
   .status {
-    font-weight: 700;
+    font-weight: 800;
   }
 </style>

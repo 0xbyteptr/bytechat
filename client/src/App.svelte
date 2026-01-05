@@ -300,28 +300,6 @@
 </script>
 
 <style>
-  /* Modern Messenger-like palette (Catppuccin Mocha) */
-  :root {
-    --bg: #1e1e2e;
-    --surface: #181825;
-    --surface-lighter: #313244;
-    --fg: #cdd6f4;
-    --accent: #89b4fa;
-    --accent-fg: #11111b;
-    --muted: #6c7086;
-    --error: #f38ba8;
-    --success: #a6e3a1;
-    --warning: #f9e2af;
-  }
-
-  :global(body) {
-    background: var(--bg);
-    color: var(--fg);
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
-    margin: 0;
-    overflow: hidden;
-  }
-
   .top-bar {
     padding: 0.75rem 1.5rem;
     display: flex;
@@ -346,8 +324,6 @@
 
   .btn-primary { background: var(--accent); color: var(--accent-fg); }
   .btn-secondary { background: var(--surface-lighter); color: var(--fg); }
-  .btn-success { background: var(--success); color: var(--accent-fg); }
-  .btn-purple { background: #cba6f7; color: var(--accent-fg); }
 
   .status-indicator {
     display: flex;
@@ -360,24 +336,30 @@
   }
 
   .dot { width: 8px; height: 8px; border-radius: 50%; }
-  .dot.connected { background: var(--success); box-shadow: 0 0 8px var(--success); }
-  .dot.connecting { background: var(--warning); }
-  .dot.disconnected { background: var(--error); }
+  .dot.connected { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.connecting { background: var(--yellow); }
+  .dot.disconnected { background: var(--red); }
 
   .sidebar-wrapper {
-    width: 300px;
+    width: 320px;
     height: 100%;
     flex-shrink: 0;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    background: var(--surface);
   }
 
   .chat-wrapper {
     flex: 1;
     height: 100%;
+    min-width: 0;
+    background: var(--bg);
   }
 
   @media (max-width: 768px) {
     .top-bar {
       padding: 0.5rem 1rem;
+      height: auto;
+      min-height: 64px;
     }
     
     .top-bar .text-sm {
@@ -390,7 +372,6 @@
       top: 0;
       left: 0;
       z-index: 10;
-      background: var(--bg);
     }
 
     .chat-wrapper {
@@ -398,7 +379,7 @@
       position: absolute;
       top: 0;
       left: 0;
-      z-index: 5;
+      z-index: 25;
     }
 
     .hidden-mobile {
@@ -407,27 +388,27 @@
   }
 </style>
 
-<div class="flex flex-col h-screen w-screen overflow-hidden">
+<div class="flex flex-col h-screen w-screen overflow-hidden bg-bg text-fg">
   {#if !isLoggedIn}
     <Auth {id} {pgpPrivateKey} {pgpPassphrase} {keypair} on:authSuccess={handleAuthSuccess} />
   {:else}
     <header class="top-bar">
-      <div class="flex justify-between items-center">
-        <div class="flex items-center gap-4">
-          <span class="text-xl font-bold tracking-tight">ByteChat</span>
-          <div class="status-indicator">
+      <div class="flex justify-between items-center w-full">
+        <div class="flex items-center gap-3 sm:gap-4">
+          <span class="text-xl font-bold tracking-tight text-accent">ByteChat</span>
+          <div class="status-indicator hidden sm:flex">
             <div class="dot {wsStatus}"></div>
-            <span class="text-muted">{wsStatus}</span>
+            <span class="opacity-50">{wsStatus}</span>
           </div>
         </div>
-        <div class="flex items-center gap-4">
-          <div class="text-sm">
-            <span class="text-muted">Logged in as:</span>
+        <div class="flex items-center gap-2 sm:gap-4">
+          <div class="text-sm hidden md:block">
+            <span class="opacity-50">Logged in as:</span>
             <span class="font-bold text-accent">{id}</span>
           </div>
           <div class="flex gap-2">
-            <button class="btn-secondary text-xs py-1 px-3" on:click={exportKeys}>Export Keys</button>
-            <button class="btn-secondary text-xs py-1 px-3" on:click={logout}>Logout</button>
+            <button class="btn-secondary text-xs py-1.5 px-3 rounded-lg" on:click={exportKeys}>Export</button>
+            <button class="btn-secondary text-xs py-1.5 px-3 rounded-lg" on:click={logout}>Logout</button>
           </div>
         </div>
       </div>
@@ -435,7 +416,7 @@
 
     <main class="flex flex-1 overflow-hidden relative">
       <div class="sidebar-wrapper" class:hidden-mobile={!showSidebar}>
-        <Sidebar {contacts} selected={contact} on:select={(e)=>{ contact = e.detail.id }} on:addContact={(e) => addContact(e.detail.id)} />
+        <Sidebar {contacts} selected={contact} on:select={(e)=>{ contact = e.detail.id; showSidebar = false; }} on:addContact={(e) => addContact(e.detail.id)} />
       </div>
       <div class="chat-wrapper" class:hidden-mobile={showSidebar}>
         <ChatWindow 

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -33,7 +34,12 @@ var (
 	challengesMux = sync.RWMutex{}
 	clients       = make(map[string]*client) // id -> client
 	clientsMux    = sync.RWMutex{}
-	upgrader      = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	upgrader      = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
+
+	// Max file size (default 50MB)
+	maxFileSize int64 = 50 * 1024 * 1024
 
 	// Server Nacl keypair for challenges
 	serverPub  [32]byte
@@ -47,6 +53,12 @@ func init() {
 	}
 	serverPub = *pub
 	serverPriv = *priv
+
+	if envMax := os.Getenv("MAX_FILE_SIZE"); envMax != "" {
+		if val, err := strconv.ParseInt(envMax, 10, 64); err == nil {
+			maxFileSize = val
+		}
+	}
 
 	// Ensure data directory exists
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
@@ -117,7 +129,7 @@ func main() {
 	http.HandleFunc("/ws", wsHandler)
 
 	addr := ":8080"
-	fmt.Printf("ByteChat server starting on %s\n", addr)
+	fmt.Printf("ByteChat server starting on %s (Max File Size: %d MB)\n", addr, maxFileSize/1024/1024)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
@@ -335,6 +347,10 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		log.Println("upgrade error:", err)
 		return
 	}
+
+	// Set read limit for large file transfers (base64 overhead + JSON)
+	conn.SetReadLimit(maxFileSize * 2)
+
 	c := &client{conn: conn}
 	clientsMux.Lock()
 	clients[id] = c
