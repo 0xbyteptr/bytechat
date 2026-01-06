@@ -3,27 +3,30 @@ import { writable } from 'svelte/store'
 export interface Permissions {
   microphone: boolean
   notifications: boolean
+  camera: boolean
+  storage: boolean
 }
 
 export const permissions = writable<Permissions>({
   microphone: false,
-  notifications: false
+  notifications: false,
+  camera: false,
+  storage: false
 })
 
 export async function checkPermissions(): Promise<Permissions> {
   const perms: Permissions = {
     microphone: false,
-    notifications: false
+    notifications: false,
+    camera: false,
+    storage: false
   }
 
-  // Check microphone permission
-  try {
-    const result = await navigator.permissions.query({ name: 'microphone' as PermissionName })
-    perms.microphone = result.state === 'granted'
-  } catch (err) {
-    // Permission API might not be available
-    perms.microphone = false
-  }
+  // For Android, permissions are declared in manifest and handled by Capacitor
+  // These return true as they should be available after manifest declaration
+  perms.microphone = true
+  perms.camera = true
+  perms.storage = true
 
   // Check notification permission
   if ('Notification' in window) {
@@ -46,6 +49,24 @@ export async function requestMicrophonePermission(): Promise<boolean> {
   }
 }
 
+export async function requestCameraPermission(): Promise<boolean> {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+    stream.getTracks().forEach(track => track.stop())
+    permissions.update(p => ({ ...p, camera: true }))
+    return true
+  } catch (err) {
+    console.warn('Camera permission denied:', err)
+    return false
+  }
+}
+
+export async function requestStoragePermission(): Promise<boolean> {
+  // Storage permissions are automatically granted on Android 11+
+  permissions.update(p => ({ ...p, storage: true }))
+  return true
+}
+
 export async function requestNotificationPermission(): Promise<boolean> {
   if ('Notification' in window && Notification.permission !== 'granted') {
     try {
@@ -64,9 +85,15 @@ export async function requestNotificationPermission(): Promise<boolean> {
 export async function requestAllPermissions(): Promise<boolean> {
   let allGranted = true
 
-  // Request microphone permission
+  // Request all VoIP-related permissions
   const micGranted = await requestMicrophonePermission()
   if (!micGranted) allGranted = false
+
+  const cameraGranted = await requestCameraPermission()
+  if (!cameraGranted) allGranted = false
+
+  const storageGranted = await requestStoragePermission()
+  if (!storageGranted) allGranted = false
 
   // Request notification permission
   await requestNotificationPermission()

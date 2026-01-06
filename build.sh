@@ -39,6 +39,11 @@ if [ ! -d "android" ]; then
 fi
 npx cap sync android
 
+echo ">>> Applying Android manifest patch (permissions)..."
+cd "$PROJECT_DIR"
+patch -p1 < android-permissions.patch || echo "Patch already applied or not needed"
+cd "$PROJECT_DIR/client"
+
 echo ">>> Building Android Debug APK..."
 cd "$PROJECT_DIR/client/android"
 # Ensure local.properties exists for Gradle

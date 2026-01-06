@@ -80,7 +80,9 @@
   let showPermissionsDialog = false
   let permissions = {
     microphone: false,
-    notifications: false
+    notifications: false,
+    camera: false,
+    storage: false
   }
   
   // VoIP state (from composable)
@@ -112,13 +114,25 @@
 
   async function requestAllPermissions() {
     loadingStatus = 'Requesting microphone access...'
-    loadingProgress = 30
+    loadingProgress = 20
     
     const micGranted = await PermissionsLib.requestMicrophonePermission()
     permissions.microphone = micGranted
 
+    loadingStatus = 'Requesting camera access...'
+    loadingProgress = 40
+    
+    const cameraGranted = await PermissionsLib.requestCameraPermission()
+    permissions.camera = cameraGranted
+
+    loadingStatus = 'Requesting storage access...'
+    loadingProgress = 50
+    
+    const storageGranted = await PermissionsLib.requestStoragePermission()
+    permissions.storage = storageGranted
+
     loadingStatus = 'Requesting notification permissions...'
-    loadingProgress = 60
+    loadingProgress = 70
     
     const notifGranted = await PermissionsLib.requestNotificationPermission()
     permissions.notifications = notifGranted
