@@ -31,19 +31,30 @@ self.onmessage = async (e: MessageEvent) => {
           return
         }
         
-        const text = decodeUTF8(decrypted)
+        const text = decodeUTF8(decrypted as any)
         self.postMessage({ type: 'success', id, result: text })
         break
       }
       
       case 'encrypt': {
         const { secretKey, publicKey, text } = data
+        
+        // Validate parameters
+        if (typeof secretKey !== 'string' || typeof publicKey !== 'string' || typeof text !== 'string') {
+          self.postMessage({ 
+            type: 'error', 
+            id, 
+            error: `unexpected type, use Uint8Array or string. Got: sk=${typeof secretKey}, pk=${typeof publicKey}, text=${typeof text}` 
+          })
+          return
+        }
+        
         const sk = decodeBase64(secretKey)
         const pk = decodeBase64(publicKey)
         const nonce = nacl.randomBytes(24)
-        const messageBytes: any = encodeUTF8(text)
+        const messageBytes = encodeUTF8(text as any as any)
         
-        const encrypted = nacl.box(messageBytes, nonce, pk, sk)
+        const encrypted = nacl.box(messageBytes as any, nonce, pk, sk)
         
         self.postMessage({ 
           type: 'success', 
@@ -58,14 +69,25 @@ self.onmessage = async (e: MessageEvent) => {
       
       case 'batchEncrypt': {
         const { secretKey, recipients, text } = data
+        
+        // Validate parameters
+        if (typeof secretKey !== 'string' || typeof text !== 'string') {
+          self.postMessage({ 
+            type: 'error', 
+            id, 
+            error: `unexpected type, use Uint8Array or string. Got: sk=${typeof secretKey}, text=${typeof text}` 
+          })
+          return
+        }
+        
         const sk = decodeBase64(secretKey)
         const results: Record<string, { cipher: string, nonce: string }> = {}
         
         for (const [memberId, publicKey] of Object.entries(recipients)) {
           const pk = decodeBase64(publicKey as string)
           const nonce = nacl.randomBytes(24)
-          const messageBytes: any = encodeUTF8(text)
-          const encrypted = nacl.box(messageBytes, nonce, pk, sk)
+          const messageBytes = encodeUTF8(text as any as any)
+          const encrypted = nacl.box(messageBytes as any, nonce, pk, sk)
           
           results[memberId] = {
             cipher: encodeBase64(encrypted),

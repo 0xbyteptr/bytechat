@@ -10,6 +10,7 @@ export interface Group {
 export const keys = writable<Record<string, string>>({})
 export const groups = writable<Group[]>([])
 export const contacts = writable<Array<{id: string, last: string, unread: number}>>([])
+export const onlineUsers = writable<Set<string>>(new Set())
 
 export async function fetchPublicKey(apiUrl: string, targetId: string): Promise<string | null> {
   try {

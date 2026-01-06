@@ -36,6 +36,18 @@ export function connectWebSocket(
   }
 
   wsInstance = connectWS(id, sessionToken, async (msg) => {
+    // Handle presence updates
+    if (msg.type === 'presence') {
+      ContactsLib.onlineUsers.set(new Set(msg.online || []))
+      return
+    }
+    
+    // Skip messages without proper structure
+    if (!msg.from && !msg.chatWith && msg.type !== 'auth' && msg.type !== 'error') {
+      console.warn('Skipping malformed message:', msg)
+      return
+    }
+    
     // Handle typing indicator
     if (msg.type === 'typing') {
       MessagesLib.setTyping(msg.from, msg.isTyping)
@@ -64,8 +76,9 @@ export function connectWebSocket(
     // Handle regular messages
     if (msg.type !== 'message') return
     
-    const isGroup = msg.to.startsWith('#')
-    const chatWith = isGroup ? msg.to : msg.from
+    // For regular messages, use chatWith if available (history), otherwise determine from to/from
+    const isGroup = msg.chatWith ? msg.chatWith.startsWith('#') : (msg.to && msg.to.startsWith('#'))
+    const chatWith = msg.chatWith || (isGroup ? msg.to : msg.from)
     
     // Fetch public key if needed
     if (!keysMap[msg.from] && !pendingKeys.has(msg.from) && !failedKeys.has(msg.from)) {

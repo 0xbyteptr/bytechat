@@ -21,6 +21,7 @@
   import * as WebSocketLib from './lib/useWebSocket'
   import * as UpdatesLib from './lib/useUpdates'
   import * as FileHandlingLib from './lib/useFileHandling'
+  import * as MessageCacheLib from './lib/useMessageCache'
   import type { CallState } from './lib/webrtc'
     import { connectWS } from './lib/ws';
     import { decrypt, encrypt } from './lib/crypto';
@@ -51,6 +52,7 @@
   // WebSocket state
   let ws: { send: (d: string) => void, close: () => void, readyState: number } | null = null
   let wsStatus: 'disconnected' | 'connecting' | 'connected' | 'authenticating' = 'disconnected'
+  let onlineUsers = new Set<string>()
   
   // UI state
   let showSidebar = true
@@ -101,6 +103,7 @@
   ContactsLib.contacts.subscribe(value => contacts = value)
   
   WebSocketLib.wsStatus.subscribe(value => wsStatus = value)
+  ContactsLib.onlineUsers.subscribe(value => onlineUsers = value)
   
   SessionLib.id.subscribe(value => id = value)
   SessionLib.sessionToken.subscribe(value => sessionToken = value)
@@ -193,6 +196,16 @@
 
   $: if (contact) {
     showSidebar = false
+    // Load cached messages for this contact
+    if (!messagesMap[contact] || messagesMap[contact].length === 0) {
+      MessageCacheLib.loadCachedMessages(contact)
+        .then(cachedMessages => {
+          if (cachedMessages.length > 0 && !messagesMap[contact]) {
+            messagesMap = { ...messagesMap, [contact!]: cachedMessages }
+          }
+        })
+        .catch(err => console.warn('Failed to load cached messages:', err))
+    }
   }
 
   $: if (contact && unreadMap[contact]) {
@@ -216,6 +229,14 @@
   function connect() {
     if(!id || !sessionToken) return
     ws = connectWS(id, sessionToken, async (msg)=>{
+      // Handle presence updates - create new Set to trigger Svelte reactivity
+      if (msg.type === 'presence') {
+        const newOnlineUsers: any = new Set(msg.online || [])
+        console.log('Presence update:', Array.from(newOnlineUsers))
+        ContactsLib.onlineUsers.set(newOnlineUsers)
+        return
+      }
+      
       if (msg.type === 'typing') {
         typingMap = { ...typingMap, [msg.from]: msg.isTyping }
         return
@@ -282,6 +303,13 @@
       
       const from = msg.from
       const chatWith = msg.chatWith || from
+      
+      // Skip if we can't determine chat context
+      if (!chatWith || !from) {
+        console.warn('Skipping message without proper context:', msg)
+        return
+      }
+      
       try {
         const fetchKey = async (targetId: string) => {
           if (pendingKeys.has(targetId)) {
@@ -335,6 +363,13 @@
 
           // Validate we have all required string parameters
           if (!cipher || !nonce || typeof cipher !== 'string' || typeof nonce !== 'string') {
+            if (cipher || nonce) {
+              console.warn('Invalid cipher/nonce types:', { 
+                cipher: typeof cipher, 
+                nonce: typeof nonce, 
+                messageId: msg.messageId 
+              })
+            }
             return null
           }
 
@@ -405,6 +440,8 @@
             ...messagesMap,
             [chatWith]: [...(messagesMap[chatWith]||[]), msgObj].sort((a, b) => (a.ts || 0) - (b.ts || 0))
           }
+          // Cache the message
+          MessageCacheLib.cacheMessage(chatWith, msgObj).catch(err => console.warn('Failed to cache message:', err))
         }
         
         // For history messages, defer to idle time
@@ -462,6 +499,12 @@
 
   async function sendTo(to:string, text:string, replyTo?: { messageId: string; text: string; from: string }) {
     if(!ws || ws.readyState !== WebSocket.OPEN || isSending) return
+    
+    // Ensure text is a string
+    if (typeof text !== 'string') {
+      console.error('sendTo: text must be a string, got', typeof text, text)
+      return
+    }
     
     isSending = true
     // Defer to next tick to allow UI to update
@@ -1024,6 +1067,9 @@
   }
 
   onMount(()=>{
+    // Initialize message cache
+    MessageCacheLib.initializeCache().catch(err => console.warn('Failed to initialize message cache:', err))
+    
     // Initialize Vercel Analytics and Speed Insights
     inject()
     injectSpeedInsights()
@@ -1453,6 +1499,7 @@
           {isNewerThanRelease}
           {latestVersion}
           {isUpdating}
+          {onlineUsers}
           selected={contact} 
           on:select={(e)=>{ contact = e.detail.id; showSidebar = false; }} 
           on:addContact={(e) => addContact(e.detail.id)} 

@@ -8,6 +8,12 @@
   export let isUpdating = false
   export let isNewerThanRelease = false
   export let latestVersion = ''
+  export let onlineUsers: Set<string> = new Set()
+  
+  $: if (onlineUsers && onlineUsers.size >= 0) {
+    console.log('Sidebar received onlineUsers:', Array.from(onlineUsers))
+  }
+  
   const dispatch = createEventDispatcher()
   function pick(id:string) { dispatch('select', { id }) }
 
@@ -132,7 +138,12 @@
           class:active={c.id === selected}
           on:click={() => pick(c.id)}
         >
-          <div class="avatar">{c.id.slice(0,1).toUpperCase()}</div>
+          <div class="avatar-wrapper">
+            <div class="avatar">{c.id.slice(0,1).toUpperCase()}</div>
+            {#if onlineUsers.has(c.id)}
+              <div class="online-indicator" title="Online"></div>
+            {/if}
+          </div>
           <div class="contact-info">
             <div class="contact-top">
               <span class="contact-name">{c.id}</span>
@@ -373,6 +384,27 @@
     font-weight: 800;
     color: var(--accent);
     flex-shrink: 0;
+  }
+
+  .avatar-wrapper {
+    position: relative;
+    flex-shrink: 0;
+  }
+
+  .online-indicator {
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    width: 12px;
+    height: 12px;
+    background: #22c55e;
+    border: 2px solid var(--surface);
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.4);
+  }
+
+  .contact-item.active .online-indicator {
+    border-color: var(--accent);
   }
 
   .contact-item.active .avatar {

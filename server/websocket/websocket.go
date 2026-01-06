@@ -24,6 +24,17 @@ var (
 	maxFileSize int64 = 50 * 1024 * 1024
 )
 
+func init() {
+	// Periodically broadcast presence every 10 seconds to keep the list fresh
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			BroadcastPresence()
+		}
+	}()
+}
+
 // Client represents a WebSocket client
 type Client struct {
 	conn *websocket.Conn
@@ -40,6 +51,31 @@ func (c *Client) Send(v interface{}) error {
 // SetMaxFileSize sets the maximum file size for WebSocket messages
 func SetMaxFileSize(size int64) {
 	maxFileSize = size
+}
+
+// GetOnlineUsers returns list of currently connected user IDs
+func GetOnlineUsers() []string {
+	clientsMux.RLock()
+	defer clientsMux.RUnlock()
+	onlineUsers := make([]string, 0, len(clients))
+	for userID := range clients {
+		onlineUsers = append(onlineUsers, userID)
+	}
+	return onlineUsers
+}
+
+// BroadcastPresence sends online user list to all connected clients
+func BroadcastPresence() {
+	onlineUsers := GetOnlineUsers()
+	msg := map[string]interface{}{
+		"type":   "presence",
+		"online": onlineUsers,
+	}
+	clientsMux.RLock()
+	defer clientsMux.RUnlock()
+	for _, client := range clients {
+		client.Send(msg)
+	}
 }
 
 // Handler handles WebSocket connections
@@ -106,6 +142,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		"status": "success",
 	})
 
+	// Broadcast updated presence to all users
+	go BroadcastPresence()
+
 	// Send ping messages every 30 seconds to keep connection alive
 	pingTicker := time.NewTicker(30 * time.Second)
 	defer pingTicker.Stop()
@@ -151,6 +190,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		clientsMux.Unlock()
 		conn.Close()
 		log.Printf("%s disconnected\n", id)
+		// Broadcast updated presence to remaining users
+		go BroadcastPresence()
 	}()
 
 	for {
