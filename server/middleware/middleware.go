@@ -51,6 +51,10 @@ func CORS(next http.Handler) http.Handler {
 			"Access-Control-Allow-Credentials",
 			"true",
 		)
+		w.Header().Set(
+			"Access-Control-Max-Age",
+			"86400",
+		)
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)
