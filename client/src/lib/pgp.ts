@@ -53,12 +53,13 @@ export async function getPublicKeyInfo(publicKeyArmored: string) {
   }
 }
 
-export async function encryptPGP(publicKeyArmored: string, text: string) {
-  const publicKey = await openpgp.readKey({ armoredKey: publicKeyArmored })
+export async function encryptPGP(publicKeyArmored: string | string[], text: string) {
+  const keys = Array.isArray(publicKeyArmored) ? publicKeyArmored : [publicKeyArmored]
+  const encryptionKeys = await Promise.all(keys.map(k => openpgp.readKey({ armoredKey: k })))
   const message = await openpgp.createMessage({ text })
   const encrypted = await openpgp.encrypt({
     message,
-    encryptionKeys: publicKey
+    encryptionKeys
   })
   return encrypted // Armored string
 }

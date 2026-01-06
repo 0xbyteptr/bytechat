@@ -268,13 +268,13 @@
           return null
         }
 
-        let senderPk = keys[from]
-        if (!senderPk) {
-          senderPk = await fetchKey(from)
+        let otherPk = keys[chatWith]
+        if (!otherPk) {
+          otherPk = await fetchKey(chatWith)
         }
 
-        if (!senderPk) {
-          console.warn(`No key found for ${from}, skipping message`)
+        if (!otherPk) {
+          console.warn(`No key found for ${chatWith}, skipping message`)
           return
         }
         
@@ -293,15 +293,15 @@
           return null
         }
 
-        text = await attemptDecrypt(senderPk) || ''
+        text = await attemptDecrypt(otherPk) || ''
 
         // If decryption failed, try fetching the key again (it might have changed)
         if (!text && msg.cipher && !msg.cipher.includes('typing')) {
           // Force a re-fetch if decryption failed
           keys = { ...keys }
-          delete keys[from] 
-          const newPk = await fetchKey(from)
-          if (newPk && newPk !== senderPk) {
+          delete keys[chatWith] 
+          const newPk = await fetchKey(chatWith)
+          if (newPk && newPk !== otherPk) {
             text = await attemptDecrypt(newPk) || ''
           }
         }
@@ -385,7 +385,15 @@
     
     let payload: any = { to }
     if (isPGP(pk)) {
-      const cipher = await encryptPGP(pk, text)
+      // Encrypt for both recipient and self so history is readable
+      let encryptionKeys = [pk]
+      if (isPGP(pgpPrivateKey)) {
+        try {
+          const myPk = await getPublicKeyFromPrivate(pgpPrivateKey)
+          if (myPk && myPk !== pk) encryptionKeys.push(myPk)
+        } catch (e) {}
+      }
+      const cipher = await encryptPGP(encryptionKeys, text)
       payload.cipher = cipher
       payload.nonce = ''
     } else if (keypair) {
