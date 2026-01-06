@@ -1,12 +1,14 @@
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
+  import { createEventDispatcher, onMount } from 'svelte'
   import { generateKeyPair, decrypt } from '../lib/crypto'
   import { Capacitor } from '@capacitor/core'
   import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
   import { FileOpener } from '@capacitor-community/file-opener'
+  import packageJson from '../../package.json'
 
   const dispatch = createEventDispatcher()
   const API_URL = import.meta.env.VITE_API_URL || 'https://api.byteptr.xyz'
+  const APP_VERSION = packageJson.version
 
   export let id = ''
   export let keypair: {publicKey:string, secretKey:string} | null = null
@@ -14,6 +16,47 @@
 
   let mode: 'login-nacl' | 'register' = 'login-nacl'
   let loading = false
+  let updateAvailable = false
+  let latestVersion = ''
+  let isNewerThanRelease = false
+
+  onMount(() => {
+    checkForUpdates()
+  })
+
+  function compareVersions(v1: string, v2: string): number {
+    const parts1 = v1.split('.').map(Number)
+    const parts2 = v2.split('.').map(Number)
+    
+    for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+      const p1 = parts1[i] || 0
+      const p2 = parts2[i] || 0
+      if (p1 > p2) return 1
+      if (p1 < p2) return -1
+    }
+    return 0
+  }
+
+  async function checkForUpdates() {
+    try {
+      const response = await fetch('https://raw.githubusercontent.com/0xbyteptr/bytechat/main/client/package.json')
+      if (response.ok) {
+        const data = await response.json()
+        latestVersion = data.version
+        const comparison = compareVersions(APP_VERSION, latestVersion)
+        
+        if (comparison > 0) {
+          // Current version is newer than GitHub (dev/unreleased version)
+          isNewerThanRelease = true
+        } else if (comparison < 0) {
+          // GitHub version is newer (update available)
+          updateAvailable = true
+        }
+      }
+    } catch (e) {
+      console.log('Could not check for updates:', e)
+    }
+  }
 
   async function loginWithNacl() {
     const trimmedId = id.trim()
@@ -181,8 +224,30 @@
       {/if}
     </div>
 
+    {#if isNewerThanRelease}
+      <div class="dev-banner">
+        <div class="dev-icon">⚠️</div>
+        <div class="dev-text">
+          <strong>Development Version</strong>
+          <span>You're using v{APP_VERSION} (newer than release v{latestVersion}). May be unstable.</span>
+        </div>
+      </div>
+    {/if}
+
+    {#if updateAvailable}
+      <div class="update-banner">
+        <div class="update-icon">🎉</div>
+        <div class="update-text">
+          <strong>Update Available!</strong>
+          <span>Version {latestVersion} is available. Refresh to update.</span>
+        </div>
+        <button class="update-btn" on:click={() => window.location.reload()}>Refresh</button>
+      </div>
+    {/if}
+
     <div class="auth-footer">
       <p>Your keys never leave your browser.</p>
+      <p class="version">v{APP_VERSION}</p>
     </div>
   </div>
 </div>
@@ -379,5 +444,113 @@
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
+  }
+
+  .auth-footer .version {
+    margin-top: 0.5rem;
+    font-size: 0.7rem;
+    opacity: 0.3;
+  }
+
+  .update-banner {
+    background: linear-gradient(135deg, #cba6f7 0%, #b4befe 100%);
+    border-radius: 12px;
+    padding: 1rem;
+    margin-top: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    color: var(--bg);
+    animation: slideIn 0.3s ease-out;
+  }
+
+  @keyframes slideIn {
+    from {
+      opacity: 0;
+      transform: translateY(-10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  .update-icon {
+    font-size: 1.5rem;
+    flex-shrink: 0;
+  }
+
+  .update-text {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .update-text strong {
+    font-weight: 800;
+    font-size: 0.9rem;
+  }
+
+  .update-text span {
+    font-size: 0.8rem;
+    opacity: 0.9;
+  }
+
+  .update-btn {
+    background: rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: var(--bg);
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    font-weight: 700;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex-shrink: 0;
+  }
+
+  .update-btn:hover {
+    background: rgba(255, 255, 255, 0.3);
+    transform: translateY(-1px);
+  }
+
+  .update-btn:active {
+    transform: translateY(0);
+  }
+
+  .dev-banner {
+    background: linear-gradient(135deg, #f9e2af 0%, #fab387 100%);
+    border-radius: 12px;
+    padding: 1rem;
+    margin-top: 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    color: var(--bg);
+    animation: slideIn 0.3s ease-out;
+    border: 2px solid rgba(250, 179, 135, 0.3);
+  }
+
+  .dev-icon {
+    font-size: 1.5rem;
+    flex-shrink: 0;
+  }
+
+  .dev-text {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .dev-text strong {
+    font-weight: 800;
+    font-size: 0.9rem;
+  }
+
+  .dev-text span {
+    font-size: 0.8rem;
+    opacity: 0.9;
   }
 </style>

@@ -50,6 +50,8 @@
   let isUpdating = false
   let isRequestingNotifications = false
   let isSending = false
+  let isNewerThanRelease = false
+  let latestVersion = ''
 
   let audioCtx: AudioContext | null = null
 
@@ -635,26 +637,43 @@
   async function checkForUpdates() {
     try {
       console.log('Checking for updates... current version:', version)
+      
+      // Check GitHub package.json for latest version
+      const pkgRes = await fetch('https://raw.githubusercontent.com/0xbyteptr/bytechat/main/client/package.json')
+      if (pkgRes.ok) {
+        const pkgData = await pkgRes.json()
+        latestVersion = pkgData.version
+        console.log('Latest version in repo:', latestVersion)
+      }
+      
+      // Check GitHub releases
       const res = await fetch('https://api.github.com/repos/0xbyteptr/bytechat/releases/latest')
       if (res.ok) {
         const data = await res.json()
-        const latestVersion = data.tag_name.replace('v', '')
-        console.log('Latest version available:', latestVersion)
+        const releaseVersion = data.tag_name.replace('v', '')
+        console.log('Latest release version:', releaseVersion)
         
-        const isNewer = (latest: string, current: string) => {
-          const l = latest.split('.').map(x => parseInt(x) || 0)
-          const c = current.split('.').map(x => parseInt(x) || 0)
-          const length = Math.max(l.length, c.length)
+        const compareVersions = (v1: string, v2: string) => {
+          const parts1 = v1.split('.').map(x => parseInt(x) || 0)
+          const parts2 = v2.split('.').map(x => parseInt(x) || 0)
+          const length = Math.max(parts1.length, parts2.length)
           for (let i = 0; i < length; i++) {
-            const lPart = l[i] || 0
-            const cPart = c[i] || 0
-            if (lPart > cPart) return true
-            if (lPart < cPart) return false
+            const p1 = parts1[i] || 0
+            const p2 = parts2[i] || 0
+            if (p1 > p2) return 1
+            if (p1 < p2) return -1
           }
-          return false
+          return 0
         }
 
-        if (isNewer(latestVersion, version)) {
+        const comparison = compareVersions(version, releaseVersion)
+        
+        if (comparison > 0) {
+          // Current version is newer than release (dev version)
+          isNewerThanRelease = true
+          console.log('Using dev version')
+        } else if (comparison < 0) {
+          // Release is newer (update available)
           updateAvailable = true
           const apkAsset = data.assets.find((a: any) => a.name.endsWith('.apk'))
           updateUrl = apkAsset ? apkAsset.browser_download_url : data.html_url
@@ -1025,7 +1044,9 @@
           {contacts} 
           {groups}
           {version} 
-          {updateAvailable} 
+          {updateAvailable}
+          {isNewerThanRelease}
+          {latestVersion}
           {isUpdating}
           selected={contact} 
           on:select={(e)=>{ contact = e.detail.id; showSidebar = false; }} 

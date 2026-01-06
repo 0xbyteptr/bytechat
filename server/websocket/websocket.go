@@ -44,28 +44,61 @@ func SetMaxFileSize(size int64) {
 
 // Handler handles WebSocket connections
 func Handler(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	token := r.URL.Query().Get("token")
-
-	if id == "" || !auth.IsValidToken(id, token) {
-		log.Printf("Unauthorized WS attempt from %s (id: %s)\n", r.RemoteAddr, id)
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("Upgrade error from %s (id: %s): %v\n", r.RemoteAddr, id, err)
+		log.Printf("Upgrade error from %s: %v\n", r.RemoteAddr, err)
 		return
 	}
 
 	conn.SetReadLimit(maxFileSize * 2)
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second)) // 10 second timeout for auth
+
+	// Wait for authentication message
+	var authMsg map[string]interface{}
+	if err := conn.ReadJSON(&authMsg); err != nil {
+		log.Printf("Auth read error from %s: %v\n", r.RemoteAddr, err)
+		conn.Close()
+		return
+	}
+
+	authType, _ := authMsg["type"].(string)
+	if authType != "auth" {
+		log.Printf("First message not auth from %s\n", r.RemoteAddr)
+		conn.WriteJSON(map[string]interface{}{
+			"type":  "error",
+			"error": "authentication required",
+		})
+		conn.Close()
+		return
+	}
+
+	id, _ := authMsg["id"].(string)
+	token, _ := authMsg["token"].(string)
+
+	if id == "" || !auth.IsValidToken(id, token) {
+		log.Printf("Unauthorized WS attempt from %s (id: %s)\n", r.RemoteAddr, id)
+		conn.WriteJSON(map[string]interface{}{
+			"type":  "error",
+			"error": "invalid credentials",
+		})
+		conn.Close()
+		return
+	}
+
+	// Clear read deadline after successful auth
+	conn.SetReadDeadline(time.Time{})
 
 	c := &Client{conn: conn}
 	clientsMux.Lock()
 	clients[id] = c
 	clientsMux.Unlock()
 	log.Printf("%s connected via WS from %s\n", id, r.RemoteAddr)
+
+	// Send authentication success
+	c.Send(map[string]interface{}{
+		"type":   "auth",
+		"status": "success",
+	})
 
 	go func() {
 		history := storage.GetHistory(id)
@@ -105,6 +138,11 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		if err := conn.ReadJSON(&msg); err != nil {
 			log.Println("read error:", err)
 			return
+		}
+
+		// Skip auth messages after initial authentication
+		if msgType, ok := msg["type"].(string); ok && msgType == "auth" {
+			continue
 		}
 
 		to, _ := msg["to"].(string)

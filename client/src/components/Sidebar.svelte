@@ -6,6 +6,8 @@
   export let version = ''
   export let updateAvailable = false
   export let isUpdating = false
+  export let isNewerThanRelease = false
+  export let latestVersion = ''
   const dispatch = createEventDispatcher()
   function pick(id:string) { dispatch('select', { id }) }
 
@@ -47,6 +49,19 @@
         </button>
       </div>
     </div>
+    {#if isNewerThanRelease}
+      <div class="dev-banner">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/>
+          <line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+        <div class="dev-text">
+          <strong>Dev Version</strong>
+          <span>v{version} (release: v{latestVersion})</span>
+        </div>
+      </div>
+    {/if}
     {#if updateAvailable}
       <button class="update-banner" on:click={() => dispatch('update')} disabled={isUpdating}>
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -193,6 +208,40 @@
     0% { transform: scale(1); }
     50% { transform: scale(1.02); }
     100% { transform: scale(1); }
+  }
+
+  .dev-banner {
+    background: linear-gradient(135deg, #f9e2af 0%, #fab387 100%);
+    color: var(--bg);
+    padding: 0.75rem;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    border: 2px solid rgba(250, 179, 135, 0.3);
+    margin-bottom: 0.5rem;
+  }
+
+  .dev-banner svg {
+    flex-shrink: 0;
+  }
+
+  .dev-text {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .dev-text strong {
+    font-weight: 800;
+    font-size: 0.85rem;
+  }
+
+  .dev-text span {
+    font-size: 0.7rem;
+    opacity: 0.9;
   }
 
   .brand {
