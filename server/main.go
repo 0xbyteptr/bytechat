@@ -817,6 +817,9 @@ func sendPush(to, from, chatId string) {
 		return
 	}
 
+	// Debug: Check lengths
+	log.Printf("DEBUG PUSH: to=%s, tokenLen=%d, keyLen=%d\n", to, len(token), len(serverKey))
+
 	payload := map[string]interface{}{
 		"to": token,
 		"notification": map[string]string{
@@ -835,7 +838,7 @@ func sendPush(to, from, chatId string) {
 	req.Header.Set("Authorization", "key="+serverKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("Error sending push: %v\n", err)
@@ -844,7 +847,10 @@ func sendPush(to, from, chatId string) {
 	defer resp.Body.Close()
 
 	respBody, _ := io.ReadAll(resp.Body)
-	log.Printf("Push sent to %s, status: %s, response: %s\n", to, resp.Status, string(respBody))
+	log.Printf("Push sent to %s, status: %s, response_len: %d\n", to, resp.Status, len(respBody))
+	if resp.StatusCode != 200 {
+		log.Printf("FCM ERROR DETAIL: %s\n", string(respBody))
+	}
 }
 
 func jsonTime(v interface{}) int64 {
