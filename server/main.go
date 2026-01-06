@@ -236,14 +236,17 @@ func (c *client) send(v interface{}) error {
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
-	allowedOrigin := os.Getenv("ALLOWED_ORIGIN")
-	if allowedOrigin == "" {
-		allowedOrigin = "*"
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		} else {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
 		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, X-ByteChat-ID")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)
@@ -775,8 +778,6 @@ func sendPush(to, from string) {
 		return
 	}
 
-	// FCM Legacy API (simpler for this example, though deprecated)
-	// In a real app, use FCM v1 with service account
 	serverKey := os.Getenv("FCM_SERVER_KEY")
 	if serverKey == "" {
 		log.Println("FCM_SERVER_KEY not set, skipping push")

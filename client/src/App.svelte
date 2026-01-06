@@ -605,16 +605,21 @@
 
   function logout() {
     isLoggedIn = false
-    if(ws) ws.close()
-    localStorage.removeItem('bytechat_session')
     id = ''
+    sessionToken = ''
+    keypair = null
     pgpPrivateKey = ''
     pgpPassphrase = ''
-    keypair = null
+    if (ws) {
+      ws.close()
+      ws = null
+    }
+    localStorage.removeItem('bytechat_session')
     keys = {}
     messagesMap = {}
     unreadMap = {}
     contact = null
+    showSidebar = true
   }
 
   async function checkForUpdates() {
@@ -692,6 +697,11 @@
     if (!id || !sessionToken) return
     try {
       const res = await fetch(`${API_URL}/groups?id=${encodeURIComponent(id)}&token=${encodeURIComponent(sessionToken)}`)
+      if (res.status === 401) {
+        console.warn('Session invalid, logging out')
+        logout()
+        return
+      }
       if (res.ok) {
         groups = await res.json()
       }
@@ -971,12 +981,12 @@
           {groups}
           {version} 
           {updateAvailable} 
-          {updateUrl} 
           {isUpdating}
           selected={contact} 
           on:select={(e)=>{ contact = e.detail.id; showSidebar = false; }} 
           on:addContact={(e) => addContact(e.detail.id)} 
           on:createGroup={(e) => createGroup(e.detail.name, e.detail.members)}
+          on:logout={logout}
           on:openSettings={() => showSettings = true} 
           on:update={installUpdate}
         />

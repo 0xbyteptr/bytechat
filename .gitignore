@@ -15,3 +15,4 @@ dist/
 .idea/
 data/
 client/android/
+client/.env.production
