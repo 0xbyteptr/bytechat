@@ -243,7 +243,7 @@
       // Handle edit message
       if (msg.type === 'edit') {
         const chatWith = msg.chatWith || msg.from
-        if (messagesMap[chatWith]) {
+        if (messagesMap[chatWith] && msg.messageId) {
           // Decrypt the edited text
           const pk = keys[msg.from]
           if (pk && keypair) {
@@ -252,7 +252,7 @@
               messagesMap = {
                 ...messagesMap,
                 [chatWith]: messagesMap[chatWith].map(m => 
-                  m.messageId === msg.messageId 
+                  (msg.messageId && m.messageId === msg.messageId)
                     ? { ...m, text, editedAt: msg.editedAt || Date.now() } 
                     : m
                 )
@@ -268,11 +268,11 @@
       // Handle delete message
       if (msg.type === 'delete') {
         const chatWith = msg.chatWith || msg.from
-        if (messagesMap[chatWith]) {
+        if (messagesMap[chatWith] && msg.messageId) {
           messagesMap = {
             ...messagesMap,
             [chatWith]: messagesMap[chatWith].map(m => 
-              m.messageId === msg.messageId 
+              (msg.messageId && m.messageId === msg.messageId)
                 ? { ...m, deleted: true, text: '' } 
                 : m
             )
@@ -642,7 +642,7 @@
   
   async function handleEdit(e: CustomEvent) {
     const { to, messageId, text } = e.detail
-    if (!ws || ws.readyState !== WebSocket.OPEN || !keypair) return
+    if (!ws || ws.readyState !== WebSocket.OPEN || !keypair || !messageId) return
     
     try {
       await fetchContactKey(to)
@@ -664,7 +664,7 @@
         messagesMap = {
           ...messagesMap,
           [to]: messagesMap[to].map(m => 
-            m.messageId === messageId 
+            (messageId && m.messageId === messageId)
               ? { ...m, text, editedAt: Date.now() } 
               : m
           )
@@ -677,7 +677,7 @@
   
   function handleDelete(e: CustomEvent) {
     const { to, messageId } = e.detail
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    if (!ws || ws.readyState !== WebSocket.OPEN || !messageId) return
     
     ws.send(JSON.stringify({ 
       type: 'delete', 
@@ -690,7 +690,7 @@
       messagesMap = {
         ...messagesMap,
         [to]: messagesMap[to].map(m => 
-          m.messageId === messageId 
+          (messageId && m.messageId === messageId)
             ? { ...m, deleted: true, text: '' } 
             : m
         )

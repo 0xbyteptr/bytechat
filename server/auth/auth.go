@@ -126,6 +126,7 @@ func ChallengeHandler(w http.ResponseWriter, r *http.Request) {
 	challenges[body.ID] = models.ChallengeData{Code: code, PublicKey: body.PublicKey}
 	challengesMux.Unlock()
 
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"encryptedChallenge": encrypted,
 		"serverPublicKey":    base64.StdEncoding.EncodeToString(serverPub[:]),
