@@ -49,6 +49,7 @@
   let updateUrl = ''
   let isUpdating = false
   let isRequestingNotifications = false
+  let isSending = false
 
   let audioCtx: AudioContext | null = null
 
@@ -298,6 +299,9 @@
 
           if (!cipher) return null
 
+          // Defer to prevent UI freeze during decryption
+          await new Promise(resolve => setTimeout(resolve, 5))
+
           if (isPGP(pgpPrivateKey) && cipher.includes('-----BEGIN PGP MESSAGE-----')) {
             try {
               return await decryptPGP(pgpPrivateKey, cipher, pgpPassphrase) as string
@@ -405,134 +409,159 @@
   }
 
   async function sendTo(to:string, text:string) {
-    if(!ws || ws.readyState !== WebSocket.OPEN) return
+    if(!ws || ws.readyState !== WebSocket.OPEN || isSending) return
     
-    let payload: any = { to }
+    isSending = true
+    // Defer to next tick to allow UI to update
+    await new Promise(resolve => setTimeout(resolve, 10))
     
-    if (to.startsWith('#')) {
-      const g = groups.find(x => x.id === to)
-      if (!g) return
+    try {
+      let payload: any = { to }
       
-      const groupCiphers: any = {}
-      for (const member of g.members) {
-        await fetchContactKey(member)
-        const mpk = keys[member]
-        if (!mpk) continue
+      if (to.startsWith('#')) {
+        const g = groups.find(x => x.id === to)
+        if (!g) return
         
-        if (isPGP(mpk)) {
-          groupCiphers[member] = { cipher: await encryptPGP(mpk, text) }
-        } else if (keypair) {
-          const { cipher, nonce } = encrypt(keypair.secretKey, mpk, text)
-          groupCiphers[member] = { cipher, nonce }
+        const groupCiphers: any = {}
+        for (const member of g.members) {
+          await fetchContactKey(member)
+          const mpk = keys[member]
+          if (!mpk) continue
+          
+          // Defer between encryptions
+          await new Promise(resolve => setTimeout(resolve, 5))
+          
+          if (isPGP(mpk)) {
+            groupCiphers[member] = { cipher: await encryptPGP(mpk, text) }
+          } else if (keypair) {
+            const { cipher, nonce } = encrypt(keypair.secretKey, mpk, text)
+            groupCiphers[member] = { cipher, nonce }
+          }
         }
-      }
-      payload.groupCiphers = groupCiphers
-    } else {
-      await fetchContactKey(to)
-      const pk = keys[to]
-      if(!pk) return
-      
-      if (isPGP(pk)) {
-        // Encrypt for both recipient and self so history is readable
-        let encryptionKeys = [pk]
-        if (isPGP(pgpPrivateKey)) {
-          try {
-            const myPk = await getPublicKeyFromPrivate(pgpPrivateKey)
-            if (myPk && myPk !== pk) encryptionKeys.push(myPk)
-          } catch (e) {}
-        }
-        const cipher = await encryptPGP(encryptionKeys, text)
-        payload.cipher = cipher
-        payload.nonce = ''
-      } else if (keypair) {
-        const { cipher, nonce } = encrypt(keypair.secretKey, pk, text)
-        payload.cipher = cipher
-        payload.nonce = nonce
+        payload.groupCiphers = groupCiphers
       } else {
-        alert('No encryption key available for this contact')
-        return
+        await fetchContactKey(to)
+        const pk = keys[to]
+        if(!pk) return
+        
+        // Defer before encryption
+        await new Promise(resolve => setTimeout(resolve, 5))
+        
+        if (isPGP(pk)) {
+          // Encrypt for both recipient and self so history is readable
+          let encryptionKeys = [pk]
+          if (isPGP(pgpPrivateKey)) {
+            try {
+              const myPk = await getPublicKeyFromPrivate(pgpPrivateKey)
+              if (myPk && myPk !== pk) encryptionKeys.push(myPk)
+            } catch (e) {}
+          }
+          const cipher = await encryptPGP(encryptionKeys, text)
+          payload.cipher = cipher
+          payload.nonce = ''
+        } else if (keypair) {
+          const { cipher, nonce } = encrypt(keypair.secretKey, pk, text)
+          payload.cipher = cipher
+          payload.nonce = nonce
+        } else {
+          alert('No encryption key available for this contact')
+          return
+        }
       }
+      
+      ws.send(JSON.stringify(payload))
+      messagesMap = {
+        ...messagesMap,
+        [to]: [...(messagesMap[to]||[]), { from: id, text, ts: Date.now() }].sort((a, b) => (a.ts || 0) - (b.ts || 0))
+      }
+      sendTyping(false)
+    } finally {
+      isSending = false
     }
-    
-    ws.send(JSON.stringify(payload))
-    messagesMap = {
-      ...messagesMap,
-      [to]: [...(messagesMap[to]||[]), { from: id, text, ts: Date.now() }].sort((a, b) => (a.ts || 0) - (b.ts || 0))
-    }
-    sendTyping(false)
   }
 
   async function sendFile(to: string, fileData: string, fileName: string, fileType: string) {
-    if(!ws || ws.readyState !== WebSocket.OPEN) return
+    if(!ws || ws.readyState !== WebSocket.OPEN || isSending) return
 
-    // Upload to CDN
-    let fileUrl = ''
+    isSending = true
+    // Defer to next tick to allow UI to update
+    await new Promise(resolve => setTimeout(resolve, 10))
+
     try {
-      let blob: Blob;
-      if (fileData.startsWith('data:')) {
-        const parts = fileData.split(',');
-        const mime = parts[0].match(/:(.*?);/)?.[1] || '';
-        const b64 = parts[1];
+      // Upload to CDN
+      let fileUrl = ''
+      try {
+        let blob: Blob;
+        if (fileData.startsWith('data:')) {
+          const parts = fileData.split(',');
+          const mime = parts[0].match(/:(.*?);/)?.[1] || '';
+          const b64 = parts[1];
+          
+          // Use a more memory-efficient way to decode base64 if possible
+          // or at least wrap it.
+          const binary = atob(b64);
+          const array = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
+          blob = new Blob([array], { type: mime });
+        } else {
+          const res = await fetch(fileData);
+          blob = await res.blob();
+        }
+
+        const formData = new FormData()
+        formData.append('file', blob, fileName)
         
-        // Use a more memory-efficient way to decode base64 if possible
-        // or at least wrap it.
-        const binary = atob(b64);
-        const array = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
-        blob = new Blob([array], { type: mime });
-      } else {
-        const res = await fetch(fileData);
-        blob = await res.blob();
+        const uploadRes = await fetch(`${API_URL}/cdn/upload`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${sessionToken}`,
+            'X-ByteChat-ID': id
+          },
+          body: formData
+        })
+        
+        if (uploadRes.ok) {
+          const data = await uploadRes.json()
+          fileUrl = data.url
+        } else {
+          console.error('CDN upload failed')
+        }
+      } catch (e) {
+        console.error('Error uploading to CDN:', e)
       }
 
-      const formData = new FormData()
-      formData.append('file', blob, fileName)
-      
-      const uploadRes = await fetch(`${API_URL}/cdn/upload`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${sessionToken}`,
-          'X-ByteChat-ID': id
-        },
-        body: formData
+      await fetchContactKey(to)
+      const pk = keys[to]
+      if(!pk) return
+
+      const payloadToEncrypt = JSON.stringify({
+        bytechat_file: true,
+        fileName,
+        fileType,
+        fileData: fileUrl ? undefined : fileData, // Fallback to base64 if CDN failed
+        fileUrl
       })
-      
-      if (uploadRes.ok) {
-        const data = await uploadRes.json()
-        fileUrl = data.url
-      } else {
-        console.error('CDN upload failed')
+
+      // Defer before encryption
+      await new Promise(resolve => setTimeout(resolve, 5))
+
+      let payload: any = { to }
+      if (isPGP(pk)) {
+        payload.cipher = await encryptPGP(pk, payloadToEncrypt)
+        payload.nonce = ''
+      } else if (keypair) {
+        const { cipher, nonce } = encrypt(keypair.secretKey, pk, payloadToEncrypt)
+        payload.cipher = cipher
+        payload.nonce = nonce
       }
-    } catch (e) {
-      console.error('Error uploading to CDN:', e)
-    }
 
-    await fetchContactKey(to)
-    const pk = keys[to]
-    if(!pk) return
-
-    const payloadToEncrypt = JSON.stringify({
-      bytechat_file: true,
-      fileName,
-      fileType,
-      fileData: fileUrl ? undefined : fileData, // Fallback to base64 if CDN failed
-      fileUrl
-    })
-
-    let payload: any = { to }
-    if (isPGP(pk)) {
-      payload.cipher = await encryptPGP(pk, payloadToEncrypt)
-      payload.nonce = ''
-    } else if (keypair) {
-      const { cipher, nonce } = encrypt(keypair.secretKey, pk, payloadToEncrypt)
-      payload.cipher = cipher
-      payload.nonce = nonce
-    }
-
-    ws.send(JSON.stringify(payload))
-    messagesMap = {
-      ...messagesMap,
-      [to]: [...(messagesMap[to]||[]), { from: id, text: `Sent file: ${fileName}`, file: { fileName, fileType, fileData, fileUrl }, ts: Date.now() }].sort((a, b) => (a.ts || 0) - (b.ts || 0))
+      ws.send(JSON.stringify(payload))
+      messagesMap = {
+        ...messagesMap,
+        [to]: [...(messagesMap[to]||[]), { from: id, text: `Sent file: ${fileName}`, file: { fileName, fileType, fileData, fileUrl }, ts: Date.now() }].sort((a, b) => (a.ts || 0) - (b.ts || 0))
+      }
+    } finally {
+      isSending = false
     }
   }
 
@@ -558,6 +587,9 @@
       contact = targetId
       return
     }
+    
+    // Defer to allow UI to update
+    await new Promise(resolve => setTimeout(resolve, 10))
     
     try {
       const res = await fetch(`${API_URL}/keys?id=${encodeURIComponent(targetId)}`)
@@ -1053,6 +1085,7 @@
             contactId={contact} 
             messages={currentMessages} 
             isTyping={contact ? !!typingMap[contact] : false}
+            isSending={isSending}
             on:send={(e)=>sendTo(e.detail.to, e.detail.text)} 
             on:sendFile={(e)=>sendFile(e.detail.to, e.detail.fileData, e.detail.fileName, e.detail.fileType)}
             on:typing={handleTyping}

@@ -25,8 +25,15 @@
       return
     }
     loading = true
+    
+    // Defer heavy operations to prevent UI freeze
+    await new Promise(resolve => setTimeout(resolve, 50))
+    
     try {
       const pubKey = await getPublicKeyFromPrivate(pgpPrivateKey)
+      
+      await new Promise(resolve => setTimeout(resolve, 10))
+      
       const resChallenge = await fetch(`${API_URL}/challenge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -39,7 +46,10 @@
         throw new Error("This ID is registered with Nacl. Please use Nacl Login tab.")
       }
 
+      await new Promise(resolve => setTimeout(resolve, 10))
       const code = await decryptPGP(pgpPrivateKey, encryptedChallenge, pgpPassphrase) as string
+      
+      await new Promise(resolve => setTimeout(resolve, 10))
       const res = await fetch(`${API_URL}/keys`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -65,6 +75,10 @@
       return
     }
     loading = true
+    
+    // Defer operations to prevent UI freeze
+    await new Promise(resolve => setTimeout(resolve, 50))
+    
     try {
       // In tweetnacl, we can't easily get public key from secret key without the full keypair object
       // but we can just try to fetch the public key from the server first if it exists
@@ -76,6 +90,8 @@
         throw new Error("This ID is registered with PGP. Please use PGP Login tab.")
       }
 
+      await new Promise(resolve => setTimeout(resolve, 10))
+      
       const resChallenge = await fetch(`${API_URL}/challenge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -87,10 +103,12 @@
       const [cipher, nonce] = encryptedChallenge.split('|')
       if (!nonce) throw new Error("Invalid challenge format from server.")
 
+      await new Promise(resolve => setTimeout(resolve, 10))
       const code = decrypt(naclSecretKey, serverPublicKey, cipher, nonce)
       
       if (!code) throw new Error("Failed to decrypt challenge. Check your secret key.")
 
+      await new Promise(resolve => setTimeout(resolve, 10))
       const res = await fetch(`${API_URL}/keys`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

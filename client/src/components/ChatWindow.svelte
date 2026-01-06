@@ -3,6 +3,7 @@
   import { createEventDispatcher, onMount, afterUpdate, tick } from 'svelte'
   export let currentUserId: string
   export let contactId: string | null = null
+  export let isSending = false
   interface Message {
     from: string;
     text: string;
@@ -19,7 +20,7 @@
   let isUploading = false
   let uploadName = ''
 
-  function send() { if(!contactId || !draft) return; dispatch('send', { to: contactId, text: draft }); draft = '' }
+  function send() { if(!contactId || !draft || isSending) return; dispatch('send', { to: contactId, text: draft }); draft = '' }
   
   function handleFile(e: Event) {
     const file = (e.target as HTMLInputElement).files?.[0]
@@ -156,10 +157,17 @@
           on:input={autoResize}
           on:keydown={handleKeydown}
         />
-        <button class="send-button" on:click={() => { send(); if(textareaEl) textareaEl.style.height = 'auto' }} disabled={!draft.trim()}>
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
-            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-          </svg>
+        <button class="send-button" on:click={() => { send(); if(textareaEl) textareaEl.style.height = 'auto' }} disabled={!draft.trim() || isSending}>
+          {#if isSending}
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" class="spinner">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none" opacity="0.25"/>
+              <path d="M4 12a8 8 0 018-8" stroke="currentColor" stroke-width="4" fill="none" stroke-linecap="round"/>
+            </svg>
+          {:else}
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+            </svg>
+          {/if}
         </button>
       </div>
     </footer>
@@ -444,5 +452,14 @@
     max-width: 300px;
     font-size: 0.95rem;
     line-height: 1.6;
+  }
+
+  .spinner {
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
   }
 </style>
