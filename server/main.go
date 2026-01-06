@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -220,7 +221,19 @@ func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
-		log.Printf("%s %s %s", r.Method, r.RequestURI, time.Since(start))
+		uri := r.RequestURI
+		if strings.Contains(uri, "token=") {
+			u, err := url.ParseRequestURI(uri)
+			if err == nil {
+				q := u.Query()
+				if q.Get("token") != "" {
+					q.Set("token", "REDACTED")
+					u.RawQuery = q.Encode()
+					uri = u.String()
+				}
+			}
+		}
+		log.Printf("%s %s %s", r.Method, uri, time.Since(start))
 	})
 }
 
