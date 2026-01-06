@@ -15,7 +15,7 @@
   // @ts-ignore - Vercel Speed Insights types
   import { injectSpeedInsights } from '@vercel/speed-insights'
 
-  const API_URL = import.meta.env.VITE_API_URL || (Capacitor.isNativePlatform() ? 'https://api.byteptr.xyz' : '')
+  const API_URL = import.meta.env.VITE_API_URL || 'https://api.byteptr.xyz'
   const MAX_FILE_SIZE = parseInt(import.meta.env.VITE_MAX_FILE_SIZE || '52428800')
   const version = pkg.version
 

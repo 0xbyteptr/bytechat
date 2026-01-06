@@ -3,11 +3,7 @@ import { Capacitor } from '@capacitor/core'
 export function connectWS(id: string, token: string, onMessage: (m: any)=>void, onStatus: (s: 'connected' | 'disconnected' | 'connecting') => void) {
   let baseUrl = import.meta.env.VITE_WS_URL
   if (!baseUrl) {
-    if (Capacitor.isNativePlatform()) {
-      baseUrl = 'wss://api.byteptr.xyz'
-    } else {
-      baseUrl = (window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + window.location.host
-    }
+    baseUrl = 'wss://api.byteptr.xyz'
   }
   const url = `${baseUrl}/ws?id=${encodeURIComponent(id)}&token=${encodeURIComponent(token)}`
   console.log('Connecting to WS:', `${baseUrl}/ws?id=${encodeURIComponent(id)}&token=REDACTED`)

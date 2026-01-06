@@ -6,7 +6,7 @@
   import { FileOpener } from '@capacitor-community/file-opener'
 
   const dispatch = createEventDispatcher()
-  const API_URL = import.meta.env.VITE_API_URL || (Capacitor.isNativePlatform() ? 'https://api.byteptr.xyz' : '')
+  const API_URL = import.meta.env.VITE_API_URL || 'https://api.byteptr.xyz'
 
   export let id = ''
   export let keypair: {publicKey:string, secretKey:string} | null = null
