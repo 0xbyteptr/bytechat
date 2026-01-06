@@ -7,6 +7,7 @@ require github.com/gorilla/websocket v1.5.0
 require (
 	firebase.google.com/go/v4 v4.18.0
 	github.com/joho/godotenv v1.5.1
+	github.com/lib/pq v1.10.9
 	google.golang.org/api v0.258.0
 )
 

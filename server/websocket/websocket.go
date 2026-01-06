@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"bytechat/auth"
+	"bytechat/groups"
 	"bytechat/models"
 	"bytechat/push"
 	"bytechat/storage"
@@ -220,8 +222,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			// Forward to recipient
 			if strings.HasPrefix(to, "#") {
 				// Group message edit
-				g, ok := storage.GetGroup(to)
-				if ok {
+				g, err := storage.GetGroup(to)
+				if err == nil {
 					msg["chatWith"] = to
 					clientsMux.RLock()
 					for _, m := range g.Members {
@@ -259,8 +261,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			// Forward to recipient
 			if strings.HasPrefix(to, "#") {
 				// Group message delete
-				g, ok := storage.GetGroup(to)
-				if ok {
+				g, err := storage.GetGroup(to)
+				if err == nil {
 					msg["chatWith"] = to
 					clientsMux.RLock()
 					for _, m := range g.Members {
@@ -305,6 +307,42 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		// Handle group management messages
+		if msgType, ok := msg["type"].(string); ok {
+			switch msgType {
+			case "group-create":
+				if err := groups.HandleGroupCreate(jsonMarshal(msg), id, conn, nil); err != nil {
+					log.Printf("group-create error: %v\n", err)
+				}
+				continue
+			case "group-update":
+				if err := groups.HandleGroupUpdate(jsonMarshal(msg), id, conn, nil); err != nil {
+					log.Printf("group-update error: %v\n", err)
+				}
+				continue
+			case "member-add":
+				if err := groups.HandleAddGroupMember(jsonMarshal(msg), id, conn, nil); err != nil {
+					log.Printf("member-add error: %v\n", err)
+				}
+				continue
+			case "member-remove":
+				if err := groups.HandleRemoveGroupMember(jsonMarshal(msg), id, conn, nil); err != nil {
+					log.Printf("member-remove error: %v\n", err)
+				}
+				continue
+			case "member-promote":
+				if err := groups.HandlePromoteAdmin(jsonMarshal(msg), id, conn, nil); err != nil {
+					log.Printf("member-promote error: %v\n", err)
+				}
+				continue
+			case "group-delete":
+				if err := groups.HandleDeleteGroup(jsonMarshal(msg), id, conn, nil); err != nil {
+					log.Printf("group-delete error: %v\n", err)
+				}
+				continue
+			}
+		}
+
 		// Handle VoIP signaling messages (call-offer, call-answer, call-ice-candidate, call-end)
 		if msgType, ok := msg["type"].(string); ok && strings.HasPrefix(msgType, "call-") {
 			to, _ := msg["to"].(string)
@@ -342,8 +380,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if strings.HasPrefix(to, "#") {
-			g, ok := storage.GetGroup(to)
-			if ok {
+			g, err := storage.GetGroup(to)
+			if err == nil {
 				storage.SaveToHistory(to, sm)
 				clientsMux.RLock()
 				for _, m := range g.Members {
@@ -394,4 +432,9 @@ func jsonTime(v interface{}) int64 {
 		return t
 	}
 	return 0
+}
+
+func jsonMarshal(v interface{}) []byte {
+	data, _ := json.Marshal(v)
+	return data
 }

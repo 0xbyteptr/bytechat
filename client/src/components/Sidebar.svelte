@@ -1,6 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte'
-  export let contacts: Array<{id:string, last:string, unread?:number}> = []
+  export let contacts: Array<{id:string, name?:string, last:string, unread?:number}> = []
   export let groups: Array<{id:string, name:string, members:string[], admin:string}> = []
   export let selected: string | null = null
   export let version = ''
@@ -16,6 +16,10 @@
   
   const dispatch = createEventDispatcher()
   function pick(id:string) { dispatch('select', { id }) }
+  
+  function openProfile(userId: string) {
+    dispatch('openProfile', { userId })
+  }
 
   let newContactId = ''
   function addContact() {
@@ -138,15 +142,15 @@
           class:active={c.id === selected}
           on:click={() => pick(c.id)}
         >
-          <div class="avatar-wrapper">
-            <div class="avatar">{c.id.slice(0,1).toUpperCase()}</div>
+          <div class="avatar-wrapper" on:click|stopPropagation={() => openProfile(c.id)} on:keydown|stopPropagation={(e) => { if (e.key === 'Enter' || e.key === ' ') openProfile(c.id) }} role="button" tabindex="0">
+            <div class="avatar">{(c.name || c.id).slice(0,1).toUpperCase()}</div>
             {#if onlineUsers.has(c.id)}
               <div class="online-indicator" title="Online"></div>
             {/if}
           </div>
           <div class="contact-info">
             <div class="contact-top">
-              <span class="contact-name">{c.id}</span>
+              <span class="contact-name">{c.name || c.id}</span>
               {#if c.unread}
                 <span class="unread-badge">{c.unread}</span>
               {/if}
@@ -389,6 +393,13 @@
   .avatar-wrapper {
     position: relative;
     flex-shrink: 0;
+    cursor: pointer;
+    border-radius: 12px;
+    transition: background 0.2s;
+  }
+
+  .avatar-wrapper:hover {
+    background: var(--surface-lighter);
   }
 
   .online-indicator {

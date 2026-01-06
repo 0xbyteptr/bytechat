@@ -31,18 +31,19 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if existing, exists := storage.GetGroup(g.ID); exists {
-			if existing.Admin != id {
-				http.Error(w, "only admin can update group", http.StatusForbidden)
+		existing, err := storage.GetGroup(g.ID)
+		if err == nil {
+			if existing.Owner != id {
+				http.Error(w, "only owner can update group", http.StatusForbidden)
 				return
 			}
 			existing.Members = g.Members
 			if g.Name != "" {
 				existing.Name = g.Name
 			}
-			storage.SetGroup(g.ID, existing)
+			storage.SaveGroup(g.ID, *existing)
 		} else {
-			g.Admin = id
+			g.Owner = id
 			found := false
 			for _, m := range g.Members {
 				if m == id {
@@ -53,10 +54,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			if !found {
 				g.Members = append(g.Members, id)
 			}
-			storage.SetGroup(g.ID, g)
+			storage.SaveGroup(g.ID, g)
 		}
-
-		storage.SaveGroups()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 

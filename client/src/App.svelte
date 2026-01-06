@@ -3,6 +3,8 @@
   import { cryptoPool } from './lib/cryptoPool'
   import Sidebar from './components/Sidebar.svelte'
   import ChatWindow from './components/ChatWindow.svelte'
+  import GroupSettings from './components/GroupSettings.svelte'
+  import UserProfile from './components/UserProfile.svelte'
   import Auth from './components/Auth.svelte'
   import LoadingScreen from './components/LoadingScreen.svelte'
   import PermissionsDialog from './components/PermissionsDialog.svelte'
@@ -42,7 +44,7 @@
   let contact: string | null = null
   let keys: Record<string,string> = {}
   let groups: Array<{id:string, name:string, members:string[], admin:string}> = []
-  let contacts: Array<{ id: string; last: string; unread: number }> = []
+  let contacts: Array<{ id: string; name?: string; last: string; unread: number }> = []
   let messagesMap: Record<string, any[]> = {}
   let unreadMap: Record<string, number> = {}
   let typingMap: Record<string, boolean> = {}
@@ -84,6 +86,16 @@
     camera: false,
     storage: false
   }
+  
+  // Group settings state
+  let showGroupSettings = false
+  let selectedGroup: any = null
+  
+  // User profile state
+  let showUserProfile = false
+  let selectedUser: string | null = null
+  let selectedUserOnline = false
+  let selectedUserCommonGroups: any[] = []
   
   // VoIP state (from composable)
   let callState: CallState = 'idle'
@@ -279,6 +291,12 @@
         return
       }
       if (msg.type === 'call-end') {
+        VoipLib.endCall()
+        return
+      }
+      
+      // Handle VoIP call cancellation
+      if (msg.type === 'call-cancel') {
         VoipLib.endCall()
         return
       }
@@ -852,11 +870,22 @@
     }
   }
   
+  function cancelCall() {
+    const currentCallContact = callContact
+    VoipLib.cancelCall()
+    if (ws && currentCallContact) {
+      ws.send(JSON.stringify({
+        type: 'call-cancel',
+        to: currentCallContact
+      }))
+    }
+  }
+  
   function toggleMute() {
     VoipLib.toggleMute()
   }
 
-  async function addContact(targetId: string) {
+  async function addContact(targetId: string, name?: string) {
     if (targetId === id) {
       alert("You can't add yourself.")
       return
@@ -875,12 +904,17 @@
         const data = await res.json()
         keys = { ...keys, [targetId]: data.publicKey }
         messagesMap = { ...messagesMap, [targetId]: [] }
+        // Add contact with optional nickname
+        if (!contacts.find(c => c.id === targetId)) {
+          contacts = [...contacts, { id: targetId, name: name || undefined, last: '', unread: 0 }]
+        }
         contact = targetId
       } else {
         alert(`User "${targetId}" not found on server.`)
       }
     } catch (e) {
-      alert("Error finding user.")
+      console.error('Error adding contact:', e)
+      alert('Error adding contact')
     }
   }
 
@@ -1554,6 +1588,12 @@
           {onlineUsers}
           selected={contact} 
           on:select={(e)=>{ contact = e.detail.id; showSidebar = false; }} 
+          on:openProfile={(e) => {
+            selectedUser = e.detail.userId
+            selectedUserOnline = onlineUsers.has(e.detail.userId)
+            selectedUserCommonGroups = groups.filter(g => g.members.includes(e.detail.userId))
+            showUserProfile = true
+          }}
           on:addContact={(e) => addContact(e.detail.id)} 
           on:createGroup={(e) => createGroup(e.detail.name, e.detail.members)}
           on:logout={logout}
@@ -1565,12 +1605,16 @@
         <div class="chat-wrapper" class:hidden-mobile={showSidebar}>
           <ChatWindow 
             currentUserId={id} 
-            contactId={contact} 
+            contactId={contact}
+            contactName={contacts.find(c => c.id === contact)?.name}
             messages={currentMessages} 
             isTyping={contact ? !!typingMap[contact] : false}
             isSending={isSending}
             callState={contact === callContact ? callState : 'idle'}
             isMuted={isMuted}
+            isOnline={contact ? onlineUsers.has(contact) : false}
+            isGroup={contact?.startsWith('#') || false}
+            group={selectedGroup}
             on:send={(e)=>sendTo(e.detail.to, e.detail.text, e.detail.replyTo)} 
             on:sendFile={(e)=>sendFile(e.detail.to, e.detail.fileData, e.detail.fileName, e.detail.fileType)}
             on:edit={handleEdit}
@@ -1578,7 +1622,12 @@
             on:typing={handleTyping}
             on:startCall={startCall}
             on:endCall={endCall}
+            on:cancelCall={cancelCall}
             on:toggleMute={toggleMute}
+            on:openGroupSettings={() => {
+              selectedGroup = groups.find(g => g.id === contact)
+              showGroupSettings = true
+            }}
             on:back={() => { contact = null; showSidebar = true; }}
           />
         </div>
@@ -1657,6 +1706,34 @@
           </div>
         </div>
       </div>
+    {/if}
+    
+    {#if showGroupSettings && selectedGroup}
+      <GroupSettings 
+        group={selectedGroup}
+        currentUserId={id}
+        isOpen={showGroupSettings}
+        on:close={() => showGroupSettings = false}
+      />
+    {/if}
+    
+    {#if showUserProfile && selectedUser}
+      <UserProfile
+        userId={selectedUser}
+        userNickname={contacts.find(c => c.id === selectedUser)?.name || ''}
+        isOpen={showUserProfile}
+        isOnline={selectedUserOnline}
+        commonGroups={selectedUserCommonGroups}
+        on:startChat={() => { contact = selectedUser; showUserProfile = false }}
+        on:addToContacts={(e) => { addContact(e.detail.userId, e.detail.name); showUserProfile = false }}
+        on:removeFromContacts={(e) => { contacts = contacts.filter(c => c.id !== e.detail.userId); showUserProfile = false }}
+        on:blockUser={() => console.log('Block user:', selectedUser)}
+        on:unblockUser={() => console.log('Unblock user:', selectedUser)}
+        on:reportUser={() => console.log('Report user:', selectedUser)}
+        on:viewEncryptionKey={() => console.log('View key:', selectedUser)}
+        on:viewGroup={(e) => { selectedGroup = groups.find(g => g.id === e.detail.groupId); showGroupSettings = true }}
+        on:close={() => showUserProfile = false}
+      />
     {/if}
   {/if}
   

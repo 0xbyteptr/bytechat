@@ -163,7 +163,10 @@ func KeysHandler(w http.ResponseWriter, r *http.Request) {
 			rand.Read(tBytes)
 			token := base64.StdEncoding.EncodeToString(tBytes)
 
-			storage.SaveSession(body.ID, token)
+			if err := storage.SaveSession(body.ID, token); err != nil {
+				http.Error(w, "failed to save session", http.StatusInternalServerError)
+				return
+			}
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{
@@ -202,7 +205,10 @@ func KeysHandler(w http.ResponseWriter, r *http.Request) {
 		rand.Read(tBytes)
 		token := base64.StdEncoding.EncodeToString(tBytes)
 
-		storage.SaveSession(body.ID, token)
+		if err := storage.SaveSession(body.ID, token); err != nil {
+			http.Error(w, "failed to save session", http.StatusInternalServerError)
+			return
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{

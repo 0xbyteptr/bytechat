@@ -3,9 +3,14 @@
   import { createEventDispatcher, onMount, afterUpdate, tick } from 'svelte'
   export let currentUserId: string
   export let contactId: string | null = null
+  export let contactName: string | null = null
   export let isSending = false
   export let callState: 'idle' | 'calling' | 'ringing' | 'connecting' | 'connected' | 'ended' = 'idle'
   export let isMuted = false
+  export let isOnline = false
+  export let isGroup = false
+  // @ts-ignore - external reference
+  export const group: any = null
   interface Message {
     from: string;
     text: string;
@@ -201,6 +206,10 @@
     dispatch('endCall')
   }
   
+  function cancelCall() {
+    dispatch('cancelCall')
+  }
+  
   function toggleMute() {
     dispatch('toggleMute')
   }
@@ -214,20 +223,33 @@
           <path d="M19 12H5M12 19l-7-7 7-7" />
         </svg>
       </button>
-      <div class="avatar">{contactId.slice(0,1).toUpperCase()}</div>
+      <div class="avatar">{(contactName || contactId).slice(0,1).toUpperCase()}</div>
       <div class="header-info">
-        <div class="contact-name">{contactId}</div>
+        <div class="contact-name">{contactName || contactId}</div>
         <div class="status">
           {#if isTyping}
             <span class="typing-indicator">typing...</span>
           {:else}
-            <span class="status-dot"></span>
-            online
+            <span class="status-dot" class:online={isOnline}></span>
+            <span class="online-text" class:online={isOnline}>{isOnline ? 'online' : 'offline'}</span>
           {/if}
         </div>
       </div>
       
       <div class="call-controls">
+        {#if isGroup}
+          <button 
+            class="icon-button" 
+            on:click={() => dispatch('openGroupSettings')} 
+            title="Group settings"
+          >
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="1"></circle>
+              <circle cx="19" cy="12" r="1"></circle>
+              <circle cx="5" cy="12" r="1"></circle>
+            </svg>
+          </button>
+        {/if}
         {#if callState === 'idle'}
           <button class="icon-button" on:click={startCall} title="Voice call">
             <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
@@ -238,6 +260,11 @@
           <button class="icon-button calling" disabled title="{callState === 'calling' ? 'Calling...' : 'Connecting...'}">
             <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" class="pulse">
               <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72 12.84 12.84 0 00.7 2.81 2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45 12.84 12.84 0 002.81.7A2 2 0 0122 16.92z" />
+            </svg>
+          </button>
+          <button class="icon-button end-call" on:click={cancelCall} title="Cancel call">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+              <path d="M18.364 5.636l-12.728 12.728M5.636 5.636l12.728 12.728" stroke="currentColor" stroke-width="2" fill="none"/>
             </svg>
           </button>
         {:else if callState === 'connected'}
@@ -454,8 +481,21 @@
   .status-dot {
     width: 8px;
     height: 8px;
-    background: var(--green);
+    background: var(--red);
     border-radius: 50%;
+  }
+
+  .status-dot.online {
+    background: var(--green);
+  }
+
+  .online-text {
+    color: var(--fg-muted);
+  }
+
+  .online-text.online {
+    color: var(--green);
+    font-weight: 600;
   }
 
   .typing-indicator {

@@ -11,6 +11,17 @@ export interface Message {
   replyTo?: { messageId: string; text: string; from: string }
   read?: boolean
   readAt?: number
+  type?: 'text' | 'call' | 'group-update' // message type
+  callData?: {
+    duration?: number // duration in seconds
+    status: 'missed' | 'completed' | 'cancelled' | 'declined' // call status
+    initiator: string // who started the call
+  }
+  groupData?: {
+    action: 'created' | 'updated' | 'member-added' | 'member-removed' | 'member-promoted'
+    actionBy?: string // who performed the action
+    targetUser?: string // affected member
+  }
 }
 
 export const messagesMap = writable<Record<string, Message[]>>({})

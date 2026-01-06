@@ -42,7 +42,7 @@ func init() {
 	}
 
 	// Initialize modules
-	if err := storage.Init(); err != nil {
+	if err := storage.InitDB(); err != nil {
 		log.Fatal(err)
 	}
 

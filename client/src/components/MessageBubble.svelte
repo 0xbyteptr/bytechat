@@ -12,6 +12,12 @@
     replyTo?: { messageId: string; text: string; from: string };
     read?: boolean;
     readAt?: number;
+    type?: 'text' | 'call';
+    callData?: {
+      duration?: number;
+      status: 'missed' | 'completed' | 'cancelled' | 'declined';
+      initiator: string;
+    };
   }
   export let isOwn = false
   
@@ -26,6 +32,16 @@
 
   function isImage(type: string) {
     return type.startsWith('image/')
+  }
+  
+  function getCallIcon(status: string): string {
+    switch(status) {
+      case 'completed': return '☎️'
+      case 'missed': return '📵'
+      case 'cancelled': return '❌'
+      case 'declined': return '📞'
+      default: return '☎️'
+    }
   }
   
   function handleEdit() {
@@ -81,6 +97,11 @@
             {msg.file.fileUrl ? 'Open Link' : 'Download'}
           </a>
         </div>
+      </div>
+    {:else if msg.type === 'call'}
+      <div class="call-message">
+        <span class="call-icon">{getCallIcon(msg.callData?.status || 'completed')}</span>
+        <span class="call-text">{msg.text}</span>
       </div>
     {:else}
       <div class="text">{msg.text}</div>
@@ -208,6 +229,22 @@
     gap: 0.4rem;
     font-style: italic;
     opacity: 0.6;
+  }
+  
+  .call-message {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+  }
+  
+  .call-icon {
+    font-size: 1.2em;
+  }
+  
+  .call-text {
+    font-size: 0.9rem;
+    opacity: 0.9;
   }
   
   .edited {
