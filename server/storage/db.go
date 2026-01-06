@@ -104,8 +104,7 @@ func createTables() error {
 		to_id TEXT NOT NULL,
 		message JSONB NOT NULL,
 		timestamp BIGINT NOT NULL,
-		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-		INDEX (to_id)
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
 
 	-- Push tokens table
