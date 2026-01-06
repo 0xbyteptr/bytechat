@@ -33,7 +33,11 @@
     from: string;
     text: string;
     ts?: number;
+    messageId?: string;
     file?: { fileName: string; fileType: string; fileData?: string; fileUrl?: string };
+    editedAt?: number;
+    deleted?: boolean;
+    replyTo?: { messageId: string; text: string; from: string };
   }
   let messagesMap: Record<string, Array<Message>> = {}
   let unreadMap: Record<string, number> = {}
@@ -235,6 +239,48 @@
         typingMap = { ...typingMap, [msg.from]: msg.isTyping }
         return
       }
+      
+      // Handle edit message
+      if (msg.type === 'edit') {
+        const chatWith = msg.chatWith || msg.from
+        if (messagesMap[chatWith]) {
+          // Decrypt the edited text
+          const pk = keys[msg.from]
+          if (pk && keypair) {
+            try {
+              const text = await cryptoPool.decrypt(keypair.secretKey, pk, msg.cipher, msg.nonce)
+              messagesMap = {
+                ...messagesMap,
+                [chatWith]: messagesMap[chatWith].map(m => 
+                  m.messageId === msg.messageId 
+                    ? { ...m, text, editedAt: msg.editedAt || Date.now() } 
+                    : m
+                )
+              }
+            } catch (e) {
+              console.error('Failed to decrypt edited message', e)
+            }
+          }
+        }
+        return
+      }
+      
+      // Handle delete message
+      if (msg.type === 'delete') {
+        const chatWith = msg.chatWith || msg.from
+        if (messagesMap[chatWith]) {
+          messagesMap = {
+            ...messagesMap,
+            [chatWith]: messagesMap[chatWith].map(m => 
+              m.messageId === msg.messageId 
+                ? { ...m, deleted: true, text: '' } 
+                : m
+            )
+          }
+        }
+        return
+      }
+      
       const from = msg.from
       const chatWith = msg.chatWith || from
       try {
@@ -319,7 +365,15 @@
           text = '<failed to decrypt message>'
         }
         
-        let msgObj: any = { from, text, ts: msg.ts || Date.now() }
+        let msgObj: any = { 
+          from, 
+          text, 
+          ts: msg.ts || Date.now(),
+          messageId: msg.messageId || (msg.ts + '_' + from),
+          editedAt: msg.editedAt,
+          deleted: msg.deleted,
+          replyTo: msg.replyTo
+        }
         try {
           if (text.startsWith('{') && text.includes('bytechat_file')) {
             const parsed = JSON.parse(text)
@@ -402,7 +456,7 @@
     }
   }
 
-  async function sendTo(to:string, text:string) {
+  async function sendTo(to:string, text:string, replyTo?: { messageId: string; text: string; from: string }) {
     if(!ws || ws.readyState !== WebSocket.OPEN || isSending) return
     
     isSending = true
@@ -410,7 +464,8 @@
     await new Promise(resolve => setTimeout(resolve, 10))
     
     try {
-      let payload: any = { to }
+      const messageId = Date.now() + '_' + Math.random().toString(36).slice(2, 11)
+      let payload: any = { to, messageId, replyTo }
       
       if (to.startsWith('#')) {
         const g = groups.find(x => x.id === to)
@@ -466,7 +521,7 @@
       ws.send(JSON.stringify(payload))
       messagesMap = {
         ...messagesMap,
-        [to]: [...(messagesMap[to]||[]), { from: id, text, ts: Date.now() }].sort((a, b) => (a.ts || 0) - (b.ts || 0))
+        [to]: [...(messagesMap[to]||[]), { from: id, text, ts: Date.now(), messageId, replyTo }].sort((a, b) => (a.ts || 0) - (b.ts || 0))
       }
       sendTyping(false)
     } finally {
@@ -583,6 +638,64 @@
     typingTimeout = setTimeout(() => {
       sendTyping(false)
     }, 3000)
+  }
+  
+  async function handleEdit(e: CustomEvent) {
+    const { to, messageId, text } = e.detail
+    if (!ws || ws.readyState !== WebSocket.OPEN || !keypair) return
+    
+    try {
+      await fetchContactKey(to)
+      const pk = keys[to]
+      if (!pk) return
+      
+      const { cipher, nonce } = await cryptoPool.encrypt(keypair.secretKey, pk, text)
+      
+      ws.send(JSON.stringify({ 
+        type: 'edit', 
+        to, 
+        messageId,
+        cipher,
+        nonce
+      }))
+      
+      // Update local message
+      if (messagesMap[to]) {
+        messagesMap = {
+          ...messagesMap,
+          [to]: messagesMap[to].map(m => 
+            m.messageId === messageId 
+              ? { ...m, text, editedAt: Date.now() } 
+              : m
+          )
+        }
+      }
+    } catch (e) {
+      console.error('Failed to edit message', e)
+    }
+  }
+  
+  function handleDelete(e: CustomEvent) {
+    const { to, messageId } = e.detail
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    
+    ws.send(JSON.stringify({ 
+      type: 'delete', 
+      to, 
+      messageId
+    }))
+    
+    // Update local message
+    if (messagesMap[to]) {
+      messagesMap = {
+        ...messagesMap,
+        [to]: messagesMap[to].map(m => 
+          m.messageId === messageId 
+            ? { ...m, deleted: true, text: '' } 
+            : m
+        )
+      }
+    }
   }
 
   async function addContact(targetId: string) {
@@ -1142,8 +1255,10 @@
             messages={currentMessages} 
             isTyping={contact ? !!typingMap[contact] : false}
             isSending={isSending}
-            on:send={(e)=>sendTo(e.detail.to, e.detail.text)} 
+            on:send={(e)=>sendTo(e.detail.to, e.detail.text, e.detail.replyTo)} 
             on:sendFile={(e)=>sendFile(e.detail.to, e.detail.fileData, e.detail.fileName, e.detail.fileType)}
+            on:edit={handleEdit}
+            on:delete={handleDelete}
             on:typing={handleTyping}
             on:back={() => { contact = null; showSidebar = true; }}
           />

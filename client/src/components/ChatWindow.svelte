@@ -8,7 +8,11 @@
     from: string;
     text: string;
     ts?: number;
+    messageId?: string;
     file?: { fileName: string; fileType: string; fileData?: string; fileUrl?: string };
+    editedAt?: number;
+    deleted?: boolean;
+    replyTo?: { messageId: string; text: string; from: string };
   }
   export let messages: Array<Message> = []
   export let isTyping = false
@@ -21,6 +25,8 @@
   let uploadName = ''
   let listEl: HTMLDivElement | null = null
   let textareaEl: HTMLTextAreaElement
+  let editingMessage: Message | null = null
+  let replyingTo: Message | null = null
   
   // Virtual scrolling for performance
   const ITEM_HEIGHT = 60 // Approximate height of message bubble
@@ -47,7 +53,62 @@
   $: visibleMessages = messages.length > 100 ? messages.slice(visibleStart, visibleEnd) : messages
   $: offsetY = visibleStart * ITEM_HEIGHT
 
-  function send() { if(!contactId || !draft || isSending) return; dispatch('send', { to: contactId, text: draft }); draft = '' }
+  function send() { 
+    if(!contactId || !draft.trim() || isSending) return
+    
+    if (editingMessage) {
+      dispatch('edit', { 
+        to: contactId, 
+        messageId: editingMessage.messageId,
+        text: draft 
+      })
+      editingMessage = null
+    } else {
+      dispatch('send', { 
+        to: contactId, 
+        text: draft,
+        replyTo: replyingTo ? {
+          messageId: replyingTo.messageId,
+          text: replyingTo.text,
+          from: replyingTo.from
+        } : undefined
+      })
+      replyingTo = null
+    }
+    
+    draft = ''
+  }
+  
+  function handleEdit(e: CustomEvent) {
+    editingMessage = e.detail
+    draft = e.detail.text
+    replyingTo = null
+    textareaEl?.focus()
+  }
+  
+  function handleDelete(e: CustomEvent) {
+    if (confirm('Delete this message?')) {
+      dispatch('delete', { 
+        to: contactId, 
+        messageId: e.detail.messageId 
+      })
+    }
+  }
+  
+  function handleReply(e: CustomEvent) {
+    replyingTo = e.detail
+    editingMessage = null
+    textareaEl?.focus()
+  }
+  
+  function cancelEdit() {
+    editingMessage = null
+    draft = ''
+  }
+  
+  function cancelReply() {
+    replyingTo = null
+  }
   
   function handleFile(e: Event) {
     const file = (e.target as HTMLInputElement).files?.[0]
@@ -87,6 +148,7 @@
     }
     reader.readAsDataURL(file)
     fileInput.value = ''
+
   }
 
   $: if (draft) {
@@ -141,7 +203,13 @@
       <div class="message-list-inner" style="height: {totalHeight ? totalHeight + 'px' : 'auto'}">
         <div style="transform: translateY({offsetY}px); will-change: transform;">
           {#each visibleMessages as m, i (visibleStart + i)}
-            <MessageBubble isOwn={m.from === currentUserId} msg={m} />
+            <MessageBubble 
+              isOwn={m.from === currentUserId} 
+              msg={m} 
+              on:edit={handleEdit}
+              on:delete={handleDelete}
+              on:reply={handleReply}
+            />
           {/each}
         </div>
       </div>
@@ -151,11 +219,36 @@
       <div class="upload-progress-container">
         <div class="upload-info">
           <span class="upload-name">Sending {uploadName}...</span>
-          <span class="upload-percent">{uploadProgress}%</span>
         </div>
         <div class="progress-bar-bg">
           <div class="progress-bar-fill" style="width: {uploadProgress}%"></div>
         </div>
+      </div>
+    {/if}
+    
+    {#if editingMessage}
+      <div class="context-banner edit">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+          <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+        </svg>
+        <div class="banner-content">
+          <span class="banner-label">Edit message</span>
+          <span class="banner-text">{editingMessage.text}</span>
+        </div>
+        <button class="banner-close" on:click={cancelEdit}>✕</button>
+      </div>
+    {/if}
+    
+    {#if replyingTo}
+      <div class="context-banner reply">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+          <path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/>
+        </svg>
+        <div class="banner-content">
+          <span class="banner-label">Reply to {replyingTo.from}</span>
+          <span class="banner-text">{replyingTo.text.length > 50 ? replyingTo.text.slice(0, 50) + '...' : replyingTo.text}</span>
+        </div>
+        <button class="banner-close" on:click={cancelReply}>✕</button>
       </div>
     {/if}
 
@@ -361,6 +454,69 @@
     height: 100%;
     background: var(--accent);
     transition: width 0.2s ease-out;
+  }
+  
+  .context-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: var(--surface);
+    border-top: 1px solid var(--surface-lighter);
+  }
+  
+  .context-banner.edit {
+    border-left: 3px solid var(--yellow);
+  }
+  
+  .context-banner.reply {
+    border-left: 3px solid var(--accent);
+  }
+  
+  .banner-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 0;
+  }
+  
+  .banner-label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  
+  .context-banner.edit .banner-label {
+    color: var(--yellow);
+  }
+  
+  .banner-text {
+    font-size: 0.9rem;
+    color: var(--subtext);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  
+  .banner-close {
+    background: none;
+    border: none;
+    color: var(--subtext);
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: 4px;
+    font-size: 1.2rem;
+    line-height: 1;
+    transition: all 0.2s;
+    flex-shrink: 0;
+  }
+  
+  .banner-close:hover {
+    background: var(--surface-lighter);
+    color: var(--fg);
   }
 
   .chat-footer {

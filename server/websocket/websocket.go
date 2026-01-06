@@ -145,6 +145,85 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		// Handle edit message
+		if msgType, ok := msg["type"].(string); ok && msgType == "edit" {
+			to, _ := msg["to"].(string)
+			if to == "" {
+				continue
+			}
+
+			msg["from"] = id
+			msg["editedAt"] = time.Now().UnixMilli()
+			delete(msg, "to")
+
+			// Forward to recipient
+			if strings.HasPrefix(to, "#") {
+				// Group message edit
+				g, ok := storage.GetGroup(to)
+				if ok {
+					msg["chatWith"] = to
+					clientsMux.RLock()
+					for _, m := range g.Members {
+						if m == id {
+							continue
+						}
+						if tc, ok := clients[m]; ok {
+							tc.Send(msg)
+						}
+					}
+					clientsMux.RUnlock()
+				}
+			} else {
+				// Direct message edit
+				clientsMux.RLock()
+				toClient, ok := clients[to]
+				clientsMux.RUnlock()
+				if ok {
+					toClient.Send(msg)
+				}
+			}
+			continue
+		}
+
+		// Handle delete message
+		if msgType, ok := msg["type"].(string); ok && msgType == "delete" {
+			to, _ := msg["to"].(string)
+			if to == "" {
+				continue
+			}
+
+			msg["from"] = id
+			delete(msg, "to")
+
+			// Forward to recipient
+			if strings.HasPrefix(to, "#") {
+				// Group message delete
+				g, ok := storage.GetGroup(to)
+				if ok {
+					msg["chatWith"] = to
+					clientsMux.RLock()
+					for _, m := range g.Members {
+						if m == id {
+							continue
+						}
+						if tc, ok := clients[m]; ok {
+							tc.Send(msg)
+						}
+					}
+					clientsMux.RUnlock()
+				}
+			} else {
+				// Direct message delete
+				clientsMux.RLock()
+				toClient, ok := clients[to]
+				clientsMux.RUnlock()
+				if ok {
+					toClient.Send(msg)
+				}
+			}
+			continue
+		}
+
 		to, _ := msg["to"].(string)
 		if to == "" {
 			continue
