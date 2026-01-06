@@ -108,11 +108,17 @@ func init() {
 func loadSessions() {
 	content, err := os.ReadFile(filepath.Join(dataDir, "sessions.json"))
 	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("Error reading sessions.json: %v\n", err)
+		}
 		return
 	}
 	sessionMux.Lock()
-	json.Unmarshal(content, &sessionTokens)
+	if err := json.Unmarshal(content, &sessionTokens); err != nil {
+		log.Printf("Error unmarshaling sessions.json: %v\n", err)
+	}
 	sessionMux.Unlock()
+	log.Printf("Loaded %d sessions\n", len(sessionTokens))
 }
 
 func saveSession(id, token string) {
@@ -120,24 +126,34 @@ func saveSession(id, token string) {
 	sessionTokens[id] = token
 	data, _ := json.Marshal(sessionTokens)
 	sessionMux.Unlock()
-	os.WriteFile(filepath.Join(dataDir, "sessions.json"), data, 0644)
+	if err := os.WriteFile(filepath.Join(dataDir, "sessions.json"), data, 0644); err != nil {
+		log.Printf("Error saving sessions.json: %v\n", err)
+	}
 }
 
 func loadGroups() {
 	content, err := os.ReadFile(filepath.Join(dataDir, "groups.json"))
 	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("Error reading groups.json: %v\n", err)
+		}
 		return
 	}
 	groupsMux.Lock()
-	json.Unmarshal(content, &groups)
+	if err := json.Unmarshal(content, &groups); err != nil {
+		log.Printf("Error unmarshaling groups.json: %v\n", err)
+	}
 	groupsMux.Unlock()
+	log.Printf("Loaded %d groups\n", len(groups))
 }
 
 func saveGroups() {
 	groupsMux.Lock()
 	data, _ := json.Marshal(groups)
 	groupsMux.Unlock()
-	os.WriteFile(filepath.Join(dataDir, "groups.json"), data, 0644)
+	if err := os.WriteFile(filepath.Join(dataDir, "groups.json"), data, 0644); err != nil {
+		log.Printf("Error saving groups.json: %v\n", err)
+	}
 }
 
 func loadPushTokens() {
@@ -267,7 +283,18 @@ func main() {
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+
+		isWS := strings.Contains(strings.ToLower(r.Header.Get("Upgrade")), "websocket")
+		if isWS {
+			log.Printf("WS_HANDSHAKE %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+		}
+
 		next.ServeHTTP(w, r)
+
+		if isWS {
+			return // Don't log again for WS as it stays open
+		}
+
 		uri := r.RequestURI
 		if strings.Contains(uri, "token=") {
 			u, err := url.ParseRequestURI(uri)
@@ -280,7 +307,7 @@ func loggingMiddleware(next http.Handler) http.Handler {
 				}
 			}
 		}
-		log.Printf("%s %s %s", r.Method, uri, time.Since(start))
+		log.Printf("%s %s %s %s", r.Method, uri, r.RemoteAddr, time.Since(start))
 	})
 }
 
@@ -295,7 +322,15 @@ func isValidToken(id, token string) bool {
 	sessionMux.RLock()
 	stored, ok := sessionTokens[id]
 	sessionMux.RUnlock()
-	return ok && stored == token
+	if !ok {
+		log.Printf("Session not found for id: %s\n", id)
+		return false
+	}
+	if stored != token {
+		log.Printf("Token mismatch for id %s: expected %s, got %s\n", id, stored, token)
+		return false
+	}
+	return true
 }
 
 func challengeHandler(w http.ResponseWriter, r *http.Request) {
@@ -590,13 +625,16 @@ func groupsHandler(w http.ResponseWriter, r *http.Request) {
 func wsHandler(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	token := r.URL.Query().Get("token")
+
 	if id == "" || !isValidToken(id, token) {
+		log.Printf("Unauthorized WS attempt from %s (id: %s)\n", r.RemoteAddr, id)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println("upgrade error:", err)
+		log.Printf("Upgrade error from %s (id: %s): %v\n", r.RemoteAddr, id, err)
 		return
 	}
 
@@ -607,7 +645,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	clientsMux.Lock()
 	clients[id] = c
 	clientsMux.Unlock()
-	log.Printf("%s connected\n", id)
+	log.Printf("%s connected via WS from %s\n", id, r.RemoteAddr)
 
 	// Send history to client
 	go func() {

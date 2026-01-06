@@ -43,7 +43,8 @@ export function connectWS(id: string, token: string, onMessage: (m: any)=>void, 
       }
     }
     
-    ws.onerror = () => {
+    ws.onerror = (ev) => {
+      console.error('WebSocket Error details:', ev)
       ws?.close()
     }
   }
