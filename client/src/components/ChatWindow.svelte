@@ -1,6 +1,6 @@
 <script lang="ts">
   import MessageBubble from './MessageBubble.svelte'
-  import { createEventDispatcher, onMount } from 'svelte'
+  import { createEventDispatcher, onMount, afterUpdate, tick } from 'svelte'
   export let currentUserId: string
   export let contactId: string | null = null
   interface Message {
@@ -66,13 +66,7 @@
   }
 
   let listEl: HTMLDivElement | null = null
-  onMount(()=>{ if(listEl) listEl.scrollTop = listEl.scrollHeight })
-  $: if(listEl && messages) {
-    setTimeout(() => {
-      if(listEl) listEl.scrollTop = listEl.scrollHeight
-    }, 0)
-  }
-
+  
   function autoResize(e: Event) {
     const el = e.target as HTMLTextAreaElement
     el.style.height = 'auto'

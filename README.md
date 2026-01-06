@@ -1,5 +1,7 @@
 # ByteChat — Minimal Privacy-Focused DM
 
+yes, this **is** vibe coded. i use this app to communicate with my brother and family. expect bugs.
+
 ByteChat is a minimal, privacy-oriented direct messaging prototype.
 
 Key principles:
