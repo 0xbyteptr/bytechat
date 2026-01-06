@@ -25,6 +25,7 @@
   let keys: Record<string,string> = {}
   let groups: Array<{id:string, name:string, members:string[], admin:string}> = []
   let pendingKeys = new Set<string>()
+  let failedKeys = new Set<string>()
   let ws: { send: (d: string) => void, close: () => void, readyState: number } | null = null
   let wsStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
   interface Message {
@@ -382,13 +383,22 @@
   }
 
   async function fetchContactKey(name:string) {
-    if(!name || keys[name] || pendingKeys.has(name)) return
+    if(!name || keys[name] || pendingKeys.has(name) || failedKeys.has(name)) return
     pendingKeys.add(name)
     try {
       const res = await fetch(`${API_URL}/keys?id=${encodeURIComponent(name)}`)
       if(res.ok) {
-        keys = { ...keys, [name]: (await res.json()).publicKey }
+        const data = await res.json()
+        if (data && data.publicKey) {
+          keys = { ...keys, [name]: data.publicKey }
+        } else {
+          failedKeys.add(name)
+        }
+      } else if (res.status === 404) {
+        failedKeys.add(name)
       }
+    } catch (e) {
+      console.error('Failed to fetch key for', name, e)
     } finally {
       pendingKeys.delete(name)
     }
@@ -644,7 +654,21 @@
         const data = await res.json()
         const latestVersion = data.tag_name.replace('v', '')
         console.log('Latest version available:', latestVersion)
-        if (latestVersion !== version) {
+        
+        const isNewer = (latest: string, current: string) => {
+          const l = latest.split('.').map(x => parseInt(x) || 0)
+          const c = current.split('.').map(x => parseInt(x) || 0)
+          const length = Math.max(l.length, c.length)
+          for (let i = 0; i < length; i++) {
+            const lPart = l[i] || 0
+            const cPart = c[i] || 0
+            if (lPart > cPart) return true
+            if (lPart < cPart) return false
+          }
+          return false
+        }
+
+        if (isNewer(latestVersion, version)) {
           updateAvailable = true
           const apkAsset = data.assets.find((a: any) => a.name.endsWith('.apk'))
           updateUrl = apkAsset ? apkAsset.browser_download_url : data.html_url

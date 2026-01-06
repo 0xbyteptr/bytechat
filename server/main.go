@@ -260,6 +260,16 @@ func saveKey(id, publicKey string) error {
 	return os.WriteFile(filepath.Join(dataDir, id+".pub"), []byte(publicKey), 0644)
 }
 
+func getStoreKeys() []string {
+	keysMutex.RLock()
+	defer keysMutex.RUnlock()
+	keys := make([]string, 0, len(keyStore))
+	for k := range keyStore {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 type client struct {
 	conn *websocket.Conn
 	mu   sync.Mutex
@@ -280,9 +290,18 @@ func corsMiddleware(next http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 		}
 
-		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
-		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, X-ByteChat-ID")
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Set(
+			"Access-Control-Allow-Methods",
+			"POST, GET, OPTIONS, PUT, DELETE",
+		)
+		w.Header().Set(
+			"Access-Control-Allow-Headers",
+			"Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, X-ByteChat-ID",
+		)
+		w.Header().Set(
+			"Access-Control-Allow-Credentials",
+			"true",
+		)
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)
@@ -613,9 +632,25 @@ func keysHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "id query param required", http.StatusBadRequest)
 			return
 		}
+
 		keysMutex.RLock()
 		pk, ok := keyStore[id]
+
+		if !ok && strings.Contains(id, ".") {
+			lastDot := strings.LastIndex(id, ".")
+			baseID := id[:lastDot]
+			pk, ok = keyStore[baseID]
+			log.Printf("Keys GET: %q not found, fallback to baseID %q (found: %v)", id, baseID, ok)
+		}
+
+		// Log search results
+		storeIDs := make([]string, 0, len(keyStore))
+		for k := range keyStore {
+			storeIDs = append(storeIDs, k)
+		}
+		log.Printf("Keys GET request: ID=%q, Success=%v, StoreIDs=%v", id, ok, storeIDs)
 		keysMutex.RUnlock()
+
 		if !ok {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
