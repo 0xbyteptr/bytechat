@@ -17,6 +17,11 @@
   --yellow: #f9e2af;
   --blue: #89b4fa;
   --lavender: #b4befe;
+  --crust: #11111b;
+  
+  /* RGB values for transparency */
+  --accent-rgb: 203, 166, 247;
+  --green-rgb: 166, 227, 161;
 }
 
 * {

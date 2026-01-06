@@ -31,6 +31,9 @@ export function connectWS(id: string, token: string, onMessage: (m: any)=>void, 
       }))
     }
     
+    // Respond to ping messages automatically (browser handles this natively)
+    // WebSocket API automatically responds to ping with pong
+    
     ws.onmessage = (ev) => {
       try {
         const data = JSON.parse(ev.data)

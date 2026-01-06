@@ -88,6 +88,12 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	// Clear read deadline after successful auth
 	conn.SetReadDeadline(time.Time{})
 
+	// Configure ping/pong handlers for keepalive
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		return nil
+	})
+
 	c := &Client{conn: conn}
 	clientsMux.Lock()
 	clients[id] = c
@@ -99,6 +105,20 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		"type":   "auth",
 		"status": "success",
 	})
+
+	// Send ping messages every 30 seconds to keep connection alive
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
+	go func() {
+		for range pingTicker.C {
+			c.mu.Lock()
+			if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(10*time.Second)); err != nil {
+				c.mu.Unlock()
+				return
+			}
+			c.mu.Unlock()
+		}
+	}()
 
 	go func() {
 		history := storage.GetHistory(id)

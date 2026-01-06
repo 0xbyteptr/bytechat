@@ -8,6 +8,18 @@ self.onmessage = async (e: MessageEvent) => {
     switch (type) {
       case 'decrypt': {
         const { secretKey, publicKey, cipher, nonce } = data
+        
+        // Validate all parameters are strings
+        if (typeof secretKey !== 'string' || typeof publicKey !== 'string' || 
+            typeof cipher !== 'string' || typeof nonce !== 'string') {
+          self.postMessage({ 
+            type: 'error', 
+            id, 
+            error: `expected string, got: sk=${typeof secretKey}, pk=${typeof publicKey}, cipher=${typeof cipher}, nonce=${typeof nonce}` 
+          })
+          return
+        }
+        
         const sk = decodeBase64(secretKey)
         const pk = decodeBase64(publicKey)
         const cipherBytes = decodeBase64(cipher)

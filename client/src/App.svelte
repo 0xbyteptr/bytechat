@@ -1,160 +1,192 @@
 <script lang="ts">
-  import { generateKeyPair, encrypt, decrypt } from './lib/crypto'
-  import { cryptoPool } from './lib/cryptoPool'
-  import { connectWS } from './lib/ws'
-  import { VoIPCall, type CallState } from './lib/webrtc'
   import { onMount, onDestroy } from 'svelte'
+  import { cryptoPool } from './lib/cryptoPool'
   import Sidebar from './components/Sidebar.svelte'
   import ChatWindow from './components/ChatWindow.svelte'
   import Auth from './components/Auth.svelte'
+  import LoadingScreen from './components/LoadingScreen.svelte'
+  import PermissionsDialog from './components/PermissionsDialog.svelte'
   import pkg from '../package.json'
-  import { LocalNotifications } from '@capacitor/local-notifications'
-  import { PushNotifications } from '@capacitor/push-notifications'
-  import { Capacitor } from '@capacitor/core'
-  import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
-  import { FileOpener } from '@capacitor-community/file-opener'
   import { inject } from '@vercel/analytics'
   // @ts-ignore - Vercel Speed Insights types
   import { injectSpeedInsights } from '@vercel/speed-insights'
+  
+  // Composables
+  import * as PermissionsLib from './lib/usePermissions'
+  import * as VoipLib from './lib/useVoip'
+  import * as NotificationsLib from './lib/useNotifications'
+  import * as SessionLib from './lib/useSession'
+  import * as MessagesLib from './lib/useMessages'
+  import * as ContactsLib from './lib/useContacts'
+  import * as WebSocketLib from './lib/useWebSocket'
+  import * as UpdatesLib from './lib/useUpdates'
+  import * as FileHandlingLib from './lib/useFileHandling'
+  import type { CallState } from './lib/webrtc'
+    import { connectWS } from './lib/ws';
+    import { decrypt, encrypt } from './lib/crypto';
+    import { Capacitor } from '@capacitor/core';
+    import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
+    import { FileOpener } from '@capacitor-community/file-opener';
 
   const API_URL = import.meta.env.VITE_API_URL || 'https://api.byteptr.xyz'
-  const MAX_FILE_SIZE = parseInt(import.meta.env.VITE_MAX_FILE_SIZE || '52428800')
   const version = pkg.version
 
+  // Session state
   let id = ''
-  let contact: string | null = null
+  let sessionToken = ''
   let keypair: {publicKey:string, secretKey:string} | null = null
+  let isLoggedIn = false
+  
+  // Contact and message state
+  let contact: string | null = null
   let keys: Record<string,string> = {}
   let groups: Array<{id:string, name:string, members:string[], admin:string}> = []
-  let pendingKeys = new Set<string>()
-  let failedKeys = new Set<string>()
-  let ws: { send: (d: string) => void, close: () => void, readyState: number } | null = null
-  let wsStatus: 'disconnected' | 'connecting' | 'connected' | 'authenticating' = 'disconnected'
-  interface Message {
-    from: string;
-    text: string;
-    ts?: number;
-    messageId?: string;
-    file?: { fileName: string; fileType: string; fileData?: string; fileUrl?: string };
-    editedAt?: number;
-    deleted?: boolean;
-    replyTo?: { messageId: string; text: string; from: string };
-  }
-  let messagesMap: Record<string, Array<Message>> = {}
+  let contacts: Array<{ id: string; last: string; unread: number }> = []
+  let messagesMap: Record<string, any[]> = {}
   let unreadMap: Record<string, number> = {}
   let typingMap: Record<string, boolean> = {}
-  let isLoggedIn = false
-  let sessionToken = ''
-
-  let typingTimeout: any = null
+  let pendingKeys = new Set<string>()
+  let failedKeys = new Set<string>()
+  
+  // WebSocket state
+  let ws: { send: (d: string) => void, close: () => void, readyState: number } | null = null
+  let wsStatus: 'disconnected' | 'connecting' | 'connected' | 'authenticating' = 'disconnected'
+  
+  // UI state
   let showSidebar = true
-  let isAppVisible = true
-  let notificationPermission = 'default'
   let showSettings = false
+  let isAppVisible = true
+  let isSending = false
+  let typingTimeout: any = null
+  
+  // Updates state
   let updateAvailable = false
   let updateUrl = ''
   let isUpdating = false
-  let isRequestingNotifications = false
-  let isSending = false
   let isNewerThanRelease = false
   let latestVersion = ''
+  let notificationPermission = 'default'
   
-  // VoIP state
-  let voipCall: VoIPCall | null = null
+  // Session validation state
+  let sessionValidationFailures = 0
+  let lastValidationAttempt = 0
+  
+  // Loading and permissions state
+  let isLoading = true
+  let loadingStatus = 'Initializing...'
+  let loadingProgress = 0
+  let showPermissionsDialog = false
+  let permissions = {
+    microphone: false,
+    notifications: false
+  }
+  
+  // VoIP state (from composable)
   let callState: CallState = 'idle'
   let callContact: string | null = null
   let isMuted = false
   let remoteAudioEl: HTMLAudioElement | null = null
+  
+  // Subscribe to stores
+  VoipLib.callState.subscribe(value => callState = value)
+  VoipLib.callContact.subscribe(value => callContact = value)
+  VoipLib.isMuted.subscribe(value => isMuted = value)
+  
+  MessagesLib.messagesMap.subscribe(value => messagesMap = value)
+  MessagesLib.unreadMap.subscribe(value => unreadMap = value)
+  MessagesLib.typingMap.subscribe(value => typingMap = value)
+  
+  ContactsLib.keys.subscribe(value => keys = value)
+  ContactsLib.groups.subscribe(value => groups = value)
+  ContactsLib.contacts.subscribe(value => contacts = value)
+  
+  WebSocketLib.wsStatus.subscribe(value => wsStatus = value)
+  
+  SessionLib.id.subscribe(value => id = value)
+  SessionLib.sessionToken.subscribe(value => sessionToken = value)
+  SessionLib.keypair.subscribe(value => keypair = value)
+  SessionLib.isLoggedIn.subscribe(value => isLoggedIn = value)
 
-  let audioCtx: AudioContext | null = null
+  async function requestAllPermissions() {
+    loadingStatus = 'Requesting microphone access...'
+    loadingProgress = 30
+    
+    const micGranted = await PermissionsLib.requestMicrophonePermission()
+    permissions.microphone = micGranted
 
-  function playPing() {
-    try {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
-      if (!AudioContextClass) return
-      
-      if (!audioCtx) {
-        audioCtx = new AudioContextClass()
-      }
-      
-      if (audioCtx.state === 'suspended') audioCtx.resume()
-      
-      const oscillator = audioCtx.createOscillator()
-      const gainNode = audioCtx.createGain()
+    loadingStatus = 'Requesting notification permissions...'
+    loadingProgress = 60
+    
+    const notifGranted = await PermissionsLib.requestNotificationPermission()
+    permissions.notifications = notifGranted
 
-      oscillator.connect(gainNode)
-      gainNode.connect(audioCtx.destination)
-
-      oscillator.type = 'sine'
-      oscillator.frequency.setValueAtTime(880, audioCtx.currentTime)
-      gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime)
-      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2)
-
-      oscillator.start()
-      oscillator.stop(audioCtx.currentTime + 0.2)
-    } catch (e) {
-      console.warn('Failed to play ping sound', e)
+    // Setup notifications if granted
+    if (notifGranted && id && sessionToken) {
+      await NotificationsLib.setupNotifications(id, sessionToken, API_URL)
     }
+
+    loadingProgress = 90
+    showPermissionsDialog = false
+    
+    return micGranted
+  }
+
+  async function initializeApp() {
+    loadingStatus = 'Loading application...'
+    loadingProgress = 10
+
+    // Small delay for visual feedback
+    await new Promise(resolve => setTimeout(resolve, 500))
+
+    loadingStatus = 'Checking permissions...'
+    loadingProgress = 20
+    
+    const perms = await PermissionsLib.checkPermissions()
+    permissions = perms
+
+    // Check if we need to show permissions dialog
+    if (!perms.microphone || !perms.notifications) {
+      loadingProgress = 30
+      showPermissionsDialog = true
+      return
+    }
+
+    // Continue initialization
+    await continueInitialization()
+  }
+
+  async function continueInitialization() {
+    loadingStatus = 'Preparing...'
+    loadingProgress = 70
+
+    if (permissions.notifications && id && sessionToken) {
+      await NotificationsLib.setupNotifications(id, sessionToken, API_URL)
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 300))
+    
+    loadingStatus = 'Ready!'
+    loadingProgress = 100
+
+    // Small delay to show completion
+    await new Promise(resolve => setTimeout(resolve, 400))
+    
+    isLoading = false
+  }
+
+  async function handlePermissionsRequest() {
+    await requestAllPermissions()
+    await continueInitialization()
+  }
+
+  async function handlePermissionsSkip() {
+    showPermissionsDialog = false
+    await continueInitialization()
   }
 
   async function requestNotificationPermission() {
-    if (Capacitor.isNativePlatform()) {
-      if (isRequestingNotifications) return
-      isRequestingNotifications = true
-      try {
-        const status = await LocalNotifications.checkPermissions()
-        notificationPermission = status.display
-        if (status.display !== 'granted') {
-          const res = await LocalNotifications.requestPermissions()
-          notificationPermission = res.display
-        }
-      } finally {
-        isRequestingNotifications = false
-      }
-    } else if ('Notification' in window) {
-      notificationPermission = Notification.permission
-      if (Notification.permission !== 'granted' && Notification.permission !== 'denied') {
-        const res = await Notification.requestPermission()
-        notificationPermission = res
-      }
-    }
-  }
-
-  async function notify(title: string, body: string) {
-    if (isAppVisible && contact === title) return // Don't notify if looking at the chat
-
-    playPing()
-
-    if (Capacitor.isNativePlatform()) {
-      await LocalNotifications.schedule({
-        notifications: [
-          {
-            title,
-            body,
-            id: Math.floor(Math.random() * 10000),
-            schedule: { at: new Date(Date.now() + 100) },
-            attachments: undefined,
-            actionTypeId: '',
-            extra: null
-          }
-        ]
-      })
-    } else if ('Notification' in window && Notification.permission === 'granted') {
-      // Use Service Worker notification if available (better for PWA/Mobile)
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.ready.then(registration => {
-          registration.showNotification(title, {
-            body,
-            icon: '/favicon.ico',
-            badge: '/favicon.ico',
-            tag: 'bytechat-msg',
-            renotify: true
-          } as any)
-        })
-      } else {
-        new Notification(title, { body })
-      }
-    }
+    const perm = await NotificationsLib.requestNotificationPermissionNative()
+    notificationPermission = perm
   }
 
   $: currentMessages = contact ? (messagesMap[contact] || []) : []
@@ -167,60 +199,6 @@
     unreadMap = { ...unreadMap, [contact]: 0 }
   }
 
-  async function registerPush() {
-    if (!Capacitor.isNativePlatform()) return
-    if (isRequestingNotifications) return
-    isRequestingNotifications = true
-
-    try {
-      let perm = await PushNotifications.checkPermissions()
-      if (perm.receive !== 'granted') {
-        perm = await PushNotifications.requestPermissions()
-      }
-
-      if (perm.receive !== 'granted') {
-        isRequestingNotifications = false
-        return
-      }
-
-      // Add listener BEFORE registering to avoid race conditions
-      PushNotifications.addListener('registration', async (token) => {
-        console.log('Push registration success, token: ' + token.value)
-        await fetch(`${API_URL}/push-token`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id, token: token.value, sessionToken })
-        })
-      })
-
-      PushNotifications.addListener('registrationError', (error: any) => {
-        console.error('Error on registration: ' + JSON.stringify(error))
-      })
-
-      // Small delay after permission grant before registration
-      // helps prevent native crashes on some Android versions
-      await new Promise(r => setTimeout(r, 500))
-      await PushNotifications.register()
-    } catch (e) {
-      console.error('Push registration error:', e)
-    } finally {
-      isRequestingNotifications = false
-    }
-    
-    PushNotifications.addListener('pushNotificationReceived', (notification) => {
-      console.log('Push received: ' + JSON.stringify(notification))
-    })
-
-    PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
-      console.log('Push action performed: ' + JSON.stringify(notification))
-      const chatId = notification.notification.data.chatId || notification.notification.data.senderId
-      if (chatId) {
-        contact = chatId
-        showSidebar = false
-      }
-    })
-  }
-
   function handleAuthSuccess(e: any) {
     const data = e.detail
     if (!data) return
@@ -231,13 +209,8 @@
     isLoggedIn = true
     showSidebar = true
     connect()
-    registerPush()
-    localStorage.setItem('bytechat_session', JSON.stringify({
-      id,
-      sessionToken,
-      keypair,
-      keys
-    }))
+    NotificationsLib.setupNotifications(id, sessionToken, API_URL)
+    saveSession()
   }
 
   function connect() {
@@ -262,10 +235,7 @@
         return
       }
       if (msg.type === 'call-end') {
-        if (voipCall) {
-          voipCall.hangup()
-        }
-        callContact = null
+        VoipLib.endCall()
         return
       }
       
@@ -275,7 +245,7 @@
         if (messagesMap[chatWith] && msg.messageId) {
           // Decrypt the edited text
           const pk = keys[msg.from]
-          if (pk && keypair) {
+          if (pk && keypair && msg.cipher && msg.nonce) {
             try {
               const text = await cryptoPool.decrypt(keypair.secretKey, pk, msg.cipher, msg.nonce)
               messagesMap = {
@@ -363,7 +333,10 @@
             nonce = msg.groupCiphers[id].nonce
           }
 
-          if (!cipher) return null
+          // Validate we have all required string parameters
+          if (!cipher || !nonce || typeof cipher !== 'string' || typeof nonce !== 'string') {
+            return null
+          }
 
           // Use worker pool to prevent UI blocking
           if (keypair && pk) {
@@ -450,10 +423,12 @@
         if (chatWith !== contact) {
           unreadMap = { ...unreadMap, [chatWith]: (unreadMap[chatWith] || 0) + 1 }
           const displayMsg = msgObj.file ? `Sent a file: ${msgObj.file.fileName}` : text
-          notify(chatWith, displayMsg.length > 50 ? displayMsg.slice(0, 50) + '...' : displayMsg)
+          const shortMsg = displayMsg.length > 50 ? displayMsg.slice(0, 50) + '...' : displayMsg
+          NotificationsLib.notify(chatWith, shortMsg, isAppVisible, contact)
         } else if (!isAppVisible) {
           const displayMsg = msgObj.file ? `Sent a file: ${msgObj.file.fileName}` : text
-          notify(chatWith, displayMsg.length > 50 ? displayMsg.slice(0, 50) + '...' : displayMsg)
+          const shortMsg = displayMsg.length > 50 ? displayMsg.slice(0, 50) + '...' : displayMsg
+          NotificationsLib.notify(chatWith, shortMsg, isAppVisible, contact)
         }
       } catch (e) {
         console.error('Failed to process message', e)
@@ -727,60 +702,23 @@
     }
   }
 
-  // VoIP Call Functions
-  function initVoIP() {
-    voipCall = new VoIPCall({
-      onStateChange: (state) => {
-        callState = state
-        if (state === 'idle') {
-          callContact = null
-          if (remoteAudioEl) {
-            remoteAudioEl.srcObject = null
-          }
-        }
-      },
-      onRemoteStream: (stream) => {
-        if (remoteAudioEl) {
-          remoteAudioEl.srcObject = stream
-          remoteAudioEl.play().catch(e => console.error('Error playing remote audio:', e))
-        }
-      },
-      onError: (error) => {
-        alert(`Call error: ${error}`)
-        if (voipCall) {
-          voipCall.hangup()
-        }
-      }
-    })
-    
-    voipCall.onIceCandidate = (candidate) => {
-      if (ws && callContact) {
-        ws.send(JSON.stringify({
-          type: 'call-ice-candidate',
-          to: callContact,
-          candidate: candidate.toJSON()
-        }))
-      }
+  // VoIP Call Functions - using composable
+  function sendVoipSignal(type: string, data: any, to: string) {
+    if (ws) {
+      ws.send(JSON.stringify({
+        type,
+        to,
+        ...data
+      }))
     }
   }
   
   async function startCall(e: CustomEvent) {
     const { to } = e.detail
-    if (!to || !ws) return
+    if (!to) return
     
     try {
-      if (!voipCall) {
-        initVoIP()
-      }
-      
-      callContact = to
-      const { offer } = await voipCall!.startCall(true) // audio only
-      
-      ws.send(JSON.stringify({
-        type: 'call-offer',
-        to: to,
-        offer
-      }))
+      await VoipLib.startCall(to, true) // audio only
     } catch (error) {
       console.error('Failed to start call:', error)
       alert('Failed to start call. Please check microphone permissions.')
@@ -788,27 +726,8 @@
   }
   
   async function handleCallOffer(msg: any) {
-    if (!confirm(`Incoming call from ${msg.from}. Answer?`)) {
-      ws?.send(JSON.stringify({
-        type: 'call-end',
-        to: msg.from
-      }))
-      return
-    }
-    
     try {
-      if (!voipCall) {
-        initVoIP()
-      }
-      
-      callContact = msg.from
-      const { answer } = await voipCall!.answerCall(msg.offer, true)
-      
-      ws?.send(JSON.stringify({
-        type: 'call-answer',
-        to: msg.from,
-        answer
-      }))
+      await VoipLib.handleCallOffer(msg.from, msg.offer, true)
     } catch (error) {
       console.error('Failed to answer call:', error)
       alert('Failed to answer call. Please check microphone permissions.')
@@ -816,34 +735,30 @@
   }
   
   async function handleCallAnswer(msg: any) {
-    if (voipCall && msg.answer) {
-      await voipCall.handleAnswer(msg.answer)
+    if (msg.answer) {
+      await VoipLib.handleCallAnswer(msg.answer)
     }
   }
   
   async function handleIceCandidate(msg: any) {
-    if (voipCall && msg.candidate) {
-      await voipCall.addIceCandidate(msg.candidate)
+    if (msg.candidate) {
+      await VoipLib.handleIceCandidate(msg.candidate)
     }
   }
   
   function endCall() {
-    if (voipCall) {
-      voipCall.hangup()
-    }
-    if (ws && callContact) {
+    const currentCallContact = callContact
+    VoipLib.endCall()
+    if (ws && currentCallContact) {
       ws.send(JSON.stringify({
         type: 'call-end',
-        to: callContact
+        to: currentCallContact
       }))
     }
-    callContact = null
   }
   
   function toggleMute() {
-    if (voipCall) {
-      isMuted = voipCall.toggleMute()
-    }
+    VoipLib.toggleMute()
   }
 
   async function addContact(targetId: string) {
@@ -914,18 +829,36 @@
 
   async function validateSession() {
     if (!isLoggedIn || !id || !sessionToken) return
+    
+    const now = Date.now()
+    // Rate limit validation attempts (max once per 30 seconds)
+    if (now - lastValidationAttempt < 30000) return
+    lastValidationAttempt = now
+    
     try {
       const res = await fetch(`${API_URL}/validate-session?id=${encodeURIComponent(id)}`, {
         headers: {
           'Authorization': `Bearer ${sessionToken}`
         }
       })
+      
       if (res.status === 401) {
-        console.warn('Session invalid, logging out')
-        logout()
+        sessionValidationFailures++
+        console.warn(`Session validation failed (${sessionValidationFailures}/3)`)
+        
+        // Only logout after 3 consecutive failures
+        if (sessionValidationFailures >= 3) {
+          console.warn('Multiple session validation failures, logging out')
+          logout()
+        }
+      } else if (res.ok) {
+        // Reset failure count on success
+        sessionValidationFailures = 0
       }
     } catch (e) {
-      console.error('Failed to validate session', e)
+      // Network error - don't logout, user might be offline
+      console.warn('Failed to validate session (network error), staying logged in', e)
+      sessionValidationFailures = 0 // Reset on network errors
     }
   }
 
@@ -939,7 +872,9 @@
       ws = null
     }
     localStorage.removeItem('bytechat_session')
+    localStorage.removeItem('bytechat_session_backup')
     keys = {}
+    groups = []
     messagesMap = {}
     unreadMap = {}
     contact = null
@@ -1093,6 +1028,14 @@
     inject()
     injectSpeedInsights()
     
+    // Show loading screen and request permissions (async, non-blocking)
+    initializeApp()
+    
+    // Initialize VoIP with remote audio element
+    if (remoteAudioEl) {
+      VoipLib.initVoIP(remoteAudioEl, sendVoipSignal)
+    }
+    
     try {
       checkForUpdates()
       fetchGroups()
@@ -1113,20 +1056,51 @@
       if(saved) {
         try {
           const s = JSON.parse(saved)
+          if (s.version !== 2) {
+            // Old session format, upgrade or clear
+            console.log('Upgrading session format')
+          }
           id = s.id
           sessionToken = s.sessionToken || ''
           keypair = s.keypair || null
           keys = s.keys || {}
+          groups = s.groups || []
           messagesMap = s.messagesMap || {}
           unreadMap = s.unreadMap || {}
+          contact = s.lastContact || null
           if (id && sessionToken && keypair) {
             isLoggedIn = true
-            validateSession()
             connect()
-            registerPush()
+            NotificationsLib.setupNotifications(id, sessionToken, API_URL)
+            // Validate session after a delay to allow WebSocket to connect first
+            setTimeout(() => validateSession(), 2000)
           }
         } catch (e) {
-          console.error('Failed to restore session', e)
+          console.error('Failed to restore session:', e)
+          // Try backup
+          try {
+            const backup = localStorage.getItem('bytechat_session_backup')
+            if (backup) {
+              const s = JSON.parse(backup)
+              id = s.id
+              sessionToken = s.sessionToken || ''
+              keypair = s.keypair || null
+              keys = s.keys || {}
+              groups = s.groups || []
+              messagesMap = s.messagesMap || {}
+              unreadMap = s.unreadMap || {}
+              contact = s.lastContact || null
+              if (id && sessionToken && keypair) {
+                isLoggedIn = true
+                connect()
+                NotificationsLib.setupNotifications(id, sessionToken, API_URL)
+                setTimeout(() => validateSession(), 2000)
+                console.log('Restored from backup')
+              }
+            }
+          } catch (backupError) {
+            console.error('Failed to restore from backup:', backupError)
+          }
         }
       }
 
@@ -1156,33 +1130,114 @@
     if (typingTimeout) clearTimeout(typingTimeout)
   })
 
+  // Session saving with backup and compression
   let saveTimeout: any = null
-  $: if(isLoggedIn) {
-    if (saveTimeout) clearTimeout(saveTimeout)
-    saveTimeout = setTimeout(() => {
-      try {
-        // To avoid QuotaExceededError, we strip large file data when saving to localStorage
-        const strippedMessages = { ...messagesMap }
-        Object.keys(strippedMessages).forEach(contactId => {
-          strippedMessages[contactId] = strippedMessages[contactId].map(m => {
-            if (m.file && m.file.fileData && m.file.fileData.length > 100000) {
-              return { ...m, file: { ...m.file, fileData: '' }, text: m.text + ' (File too large to persist)' }
-            }
-            return m
-          })
-        })
-
-        localStorage.setItem('bytechat_session', JSON.stringify({
-          id, sessionToken, keypair, keys, messagesMap: strippedMessages, unreadMap
-        }))
-      } catch (e) {
-        console.warn('LocalStorage quota exceeded, session not fully saved', e)
+  let lastSaveTime = 0
+  
+  function saveSession() {
+    const now = Date.now()
+    // Rate limit saves to max once per 500ms
+    if (now - lastSaveTime < 500) {
+      if (saveTimeout) clearTimeout(saveTimeout)
+      saveTimeout = setTimeout(saveSession, 500)
+      return
+    }
+    
+    lastSaveTime = now
+    
+    try {
+      // Create backup of current session before saving new one
+      const current = localStorage.getItem('bytechat_session')
+      if (current) {
+        try {
+          localStorage.setItem('bytechat_session_backup', current)
+        } catch (e) {
+          console.warn('Failed to create session backup', e)
+        }
       }
-    }, 1000)
+      
+      // Strip large file data and limit message history to avoid quota errors
+      const strippedMessages: Record<string, any[]> = {}
+      Object.keys(messagesMap).forEach(contactId => {
+        // Keep only last 100 messages per contact
+        const messages = messagesMap[contactId].slice(-100)
+        strippedMessages[contactId] = messages.map(m => {
+          if (m.file && m.file.fileData) {
+            // Keep small files (< 50KB), strip large ones
+            if (m.file.fileData.length > 50000) {
+              return { 
+                ...m, 
+                file: { 
+                  fileName: m.file.fileName, 
+                  fileType: m.file.fileType,
+                  fileUrl: m.file.fileUrl,
+                  fileData: '' 
+                }, 
+                text: m.text || `File: ${m.file.fileName}` 
+              }
+            }
+          }
+          return m
+        })
+      })
+
+      const sessionData = {
+        version: 2,
+        id,
+        sessionToken,
+        keypair,
+        keys,
+        groups,
+        messagesMap: strippedMessages,
+        unreadMap,
+        lastContact: contact,
+        savedAt: now
+      }
+      
+      const serialized = JSON.stringify(sessionData)
+      
+      // Check size and warn if approaching limits
+      if (serialized.length > 4500000) { // 4.5MB (localStorage is typically 5-10MB)
+        console.warn('Session data is large:', Math.round(serialized.length / 1024), 'KB')
+        // Try more aggressive pruning
+        Object.keys(strippedMessages).forEach(contactId => {
+          strippedMessages[contactId] = strippedMessages[contactId].slice(-50)
+        })
+        sessionData.messagesMap = strippedMessages
+      }
+      
+      localStorage.setItem('bytechat_session', JSON.stringify(sessionData))
+    } catch (e) {
+      console.error('Failed to save session:', e)
+      
+      // Try emergency save with minimal data
+      try {
+        localStorage.setItem('bytechat_session', JSON.stringify({
+          version: 2,
+          id,
+          sessionToken,
+          keypair,
+          keys,
+          groups,
+          messagesMap: {}, // Drop all messages
+          unreadMap: {},
+          lastContact: contact,
+          savedAt: Date.now()
+        }))
+        console.warn('Saved minimal session data (messages dropped)')
+      } catch (emergencyError) {
+        console.error('Emergency save failed:', emergencyError)
+      }
+    }
+  }
+  
+  // Auto-save on data changes
+  $: if(isLoggedIn && (id || sessionToken || keypair || keys || groups || messagesMap || unreadMap || contact)) {
+    if (saveTimeout) clearTimeout(saveTimeout)
+    saveTimeout = setTimeout(saveSession, 1000)
   }
 
   // small mock contacts list for UI
-  let contacts: Array<{ id: string; last: string; unread: number }> = []
   let contactsDebounce: any = null
   
   $: if (messagesMap || unreadMap) {
@@ -1373,9 +1428,21 @@
 </style>
 
 <div class="flex flex-col h-screen w-screen overflow-hidden bg-bg text-fg">
-  {#if !isLoggedIn}
+  {#if isLoading}
+    <LoadingScreen status={loadingStatus} progress={loadingProgress} />
+  {/if}
+  
+  {#if showPermissionsDialog}
+    <PermissionsDialog 
+      {permissions} 
+      on:request={handlePermissionsRequest}
+      on:skip={handlePermissionsSkip}
+    />
+  {/if}
+  
+  {#if !isLoggedIn && !isLoading}
     <Auth {id} {keypair} on:authSuccess={handleAuthSuccess} />
-  {:else}
+  {:else if !isLoading}
     <main class="flex flex-1 overflow-hidden relative bg-bg">
       <div class="sidebar-wrapper" class:hidden-mobile={!showSidebar}>
         <Sidebar 
