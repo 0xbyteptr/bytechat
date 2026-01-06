@@ -10,6 +10,7 @@ export function connectWS(id: string, token: string, onMessage: (m: any)=>void, 
     }
   }
   const url = `${baseUrl}/ws?id=${encodeURIComponent(id)}&token=${encodeURIComponent(token)}`
+  console.log('Connecting to WS:', `${baseUrl}/ws?id=${encodeURIComponent(id)}&token=REDACTED`)
   
   let ws: WebSocket | null = null
   let forcedClose = false

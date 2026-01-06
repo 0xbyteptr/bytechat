@@ -102,6 +102,25 @@ func init() {
 	loadKeys()
 	loadPushTokens()
 	loadGroups()
+	loadSessions()
+}
+
+func loadSessions() {
+	content, err := os.ReadFile(filepath.Join(dataDir, "sessions.json"))
+	if err != nil {
+		return
+	}
+	sessionMux.Lock()
+	json.Unmarshal(content, &sessionTokens)
+	sessionMux.Unlock()
+}
+
+func saveSession(id, token string) {
+	sessionMux.Lock()
+	sessionTokens[id] = token
+	data, _ := json.Marshal(sessionTokens)
+	sessionMux.Unlock()
+	os.WriteFile(filepath.Join(dataDir, "sessions.json"), data, 0644)
 }
 
 func loadGroups() {
@@ -429,9 +448,7 @@ func keysHandler(w http.ResponseWriter, r *http.Request) {
 			rand.Read(tBytes)
 			token := base64.StdEncoding.EncodeToString(tBytes)
 
-			sessionMux.Lock()
-			sessionTokens[body.ID] = token
-			sessionMux.Unlock()
+			saveSession(body.ID, token)
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]string{
@@ -474,9 +491,7 @@ func keysHandler(w http.ResponseWriter, r *http.Request) {
 		rand.Read(tBytes)
 		token := base64.StdEncoding.EncodeToString(tBytes)
 
-		sessionMux.Lock()
-		sessionTokens[body.ID] = token
-		sessionMux.Unlock()
+		saveSession(body.ID, token)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
