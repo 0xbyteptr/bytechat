@@ -224,6 +224,26 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		// Handle VoIP signaling messages (call-offer, call-answer, call-ice-candidate, call-end)
+		if msgType, ok := msg["type"].(string); ok && strings.HasPrefix(msgType, "call-") {
+			to, _ := msg["to"].(string)
+			if to == "" {
+				continue
+			}
+
+			msg["from"] = id
+			delete(msg, "to")
+
+			// Forward VoIP signaling to recipient
+			clientsMux.RLock()
+			toClient, ok := clients[to]
+			clientsMux.RUnlock()
+			if ok {
+				toClient.Send(msg)
+			}
+			continue
+		}
+
 		to, _ := msg["to"].(string)
 		if to == "" {
 			continue

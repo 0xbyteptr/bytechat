@@ -2,6 +2,7 @@
   import { generateKeyPair, encrypt, decrypt } from './lib/crypto'
   import { cryptoPool } from './lib/cryptoPool'
   import { connectWS } from './lib/ws'
+  import { VoIPCall, type CallState } from './lib/webrtc'
   import { onMount, onDestroy } from 'svelte'
   import Sidebar from './components/Sidebar.svelte'
   import ChatWindow from './components/ChatWindow.svelte'
@@ -57,6 +58,13 @@
   let isSending = false
   let isNewerThanRelease = false
   let latestVersion = ''
+  
+  // VoIP state
+  let voipCall: VoIPCall | null = null
+  let callState: CallState = 'idle'
+  let callContact: string | null = null
+  let isMuted = false
+  let remoteAudioEl: HTMLAudioElement | null = null
 
   let audioCtx: AudioContext | null = null
 
@@ -237,6 +245,27 @@
     ws = connectWS(id, sessionToken, async (msg)=>{
       if (msg.type === 'typing') {
         typingMap = { ...typingMap, [msg.from]: msg.isTyping }
+        return
+      }
+      
+      // Handle VoIP signaling
+      if (msg.type === 'call-offer') {
+        await handleCallOffer(msg)
+        return
+      }
+      if (msg.type === 'call-answer') {
+        await handleCallAnswer(msg)
+        return
+      }
+      if (msg.type === 'call-ice-candidate') {
+        await handleIceCandidate(msg)
+        return
+      }
+      if (msg.type === 'call-end') {
+        if (voipCall) {
+          voipCall.hangup()
+        }
+        callContact = null
         return
       }
       
@@ -695,6 +724,125 @@
             : m
         )
       }
+    }
+  }
+
+  // VoIP Call Functions
+  function initVoIP() {
+    voipCall = new VoIPCall({
+      onStateChange: (state) => {
+        callState = state
+        if (state === 'idle') {
+          callContact = null
+          if (remoteAudioEl) {
+            remoteAudioEl.srcObject = null
+          }
+        }
+      },
+      onRemoteStream: (stream) => {
+        if (remoteAudioEl) {
+          remoteAudioEl.srcObject = stream
+          remoteAudioEl.play().catch(e => console.error('Error playing remote audio:', e))
+        }
+      },
+      onError: (error) => {
+        alert(`Call error: ${error}`)
+        if (voipCall) {
+          voipCall.hangup()
+        }
+      }
+    })
+    
+    voipCall.onIceCandidate = (candidate) => {
+      if (ws && callContact) {
+        ws.send(JSON.stringify({
+          type: 'call-ice-candidate',
+          to: callContact,
+          candidate: candidate.toJSON()
+        }))
+      }
+    }
+  }
+  
+  async function startCall(e: CustomEvent) {
+    const { to } = e.detail
+    if (!to || !ws) return
+    
+    try {
+      if (!voipCall) {
+        initVoIP()
+      }
+      
+      callContact = to
+      const { offer } = await voipCall!.startCall(true) // audio only
+      
+      ws.send(JSON.stringify({
+        type: 'call-offer',
+        to: to,
+        offer
+      }))
+    } catch (error) {
+      console.error('Failed to start call:', error)
+      alert('Failed to start call. Please check microphone permissions.')
+    }
+  }
+  
+  async function handleCallOffer(msg: any) {
+    if (!confirm(`Incoming call from ${msg.from}. Answer?`)) {
+      ws?.send(JSON.stringify({
+        type: 'call-end',
+        to: msg.from
+      }))
+      return
+    }
+    
+    try {
+      if (!voipCall) {
+        initVoIP()
+      }
+      
+      callContact = msg.from
+      const { answer } = await voipCall!.answerCall(msg.offer, true)
+      
+      ws?.send(JSON.stringify({
+        type: 'call-answer',
+        to: msg.from,
+        answer
+      }))
+    } catch (error) {
+      console.error('Failed to answer call:', error)
+      alert('Failed to answer call. Please check microphone permissions.')
+    }
+  }
+  
+  async function handleCallAnswer(msg: any) {
+    if (voipCall && msg.answer) {
+      await voipCall.handleAnswer(msg.answer)
+    }
+  }
+  
+  async function handleIceCandidate(msg: any) {
+    if (voipCall && msg.candidate) {
+      await voipCall.addIceCandidate(msg.candidate)
+    }
+  }
+  
+  function endCall() {
+    if (voipCall) {
+      voipCall.hangup()
+    }
+    if (ws && callContact) {
+      ws.send(JSON.stringify({
+        type: 'call-end',
+        to: callContact
+      }))
+    }
+    callContact = null
+  }
+  
+  function toggleMute() {
+    if (voipCall) {
+      isMuted = voipCall.toggleMute()
     }
   }
 
@@ -1255,11 +1403,16 @@
             messages={currentMessages} 
             isTyping={contact ? !!typingMap[contact] : false}
             isSending={isSending}
+            callState={contact === callContact ? callState : 'idle'}
+            isMuted={isMuted}
             on:send={(e)=>sendTo(e.detail.to, e.detail.text, e.detail.replyTo)} 
             on:sendFile={(e)=>sendFile(e.detail.to, e.detail.fileData, e.detail.fileName, e.detail.fileType)}
             on:edit={handleEdit}
             on:delete={handleDelete}
             on:typing={handleTyping}
+            on:startCall={startCall}
+            on:endCall={endCall}
+            on:toggleMute={toggleMute}
             on:back={() => { contact = null; showSidebar = true; }}
           />
         </div>
@@ -1340,4 +1493,7 @@
       </div>
     {/if}
   {/if}
+  
+  <!-- Hidden audio element for remote audio stream -->
+  <audio bind:this={remoteAudioEl} autoplay style="display: none;"></audio>
 </div>
