@@ -295,6 +295,16 @@ func main() {
 	log.Fatal(http.ListenAndServe(addr, handler))
 }
 
+type statusResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rw *statusResponseWriter) WriteHeader(code int) {
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -304,7 +314,8 @@ func loggingMiddleware(next http.Handler) http.Handler {
 			log.Printf("WS_HANDSHAKE %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 		}
 
-		next.ServeHTTP(w, r)
+		srw := &statusResponseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(srw, r)
 
 		if isWS {
 			return // Don't log again for WS as it stays open
@@ -322,7 +333,7 @@ func loggingMiddleware(next http.Handler) http.Handler {
 				}
 			}
 		}
-		log.Printf("%s %s %s %s", r.Method, uri, r.RemoteAddr, time.Since(start))
+		log.Printf("%s %s %d %s %s", r.Method, uri, srw.status, r.RemoteAddr, time.Since(start))
 	})
 }
 
@@ -753,7 +764,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 						msgCopy["chatWith"] = to
 						tc.send(msgCopy)
 					} else {
-						sendPush(m, id)
+						sendPush(m, id, to)
 					}
 				}
 				clientsMux.RUnlock()
@@ -776,13 +787,13 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			// recipient offline — send push notification
-			log.Printf("recipient %s offline; sending push notification\n", to)
-			sendPush(to, id)
+			log.Printf("recipient %s (from %s) offline; sending push notification\n", to, id)
+			sendPush(to, id, id)
 		}
 	}
 }
 
-func sendPush(to, from string) {
+func sendPush(to, from, chatId string) {
 	pushTokensMux.RLock()
 	token, ok := pushTokens[to]
 	pushTokensMux.RUnlock()
@@ -790,7 +801,7 @@ func sendPush(to, from string) {
 		return
 	}
 
-	serverKey := os.Getenv("FCM_SERVER_KEY")
+	serverKey := strings.TrimSpace(os.Getenv("FCM_SERVER_KEY"))
 	if serverKey == "" {
 		log.Println("FCM_SERVER_KEY not set, skipping push")
 		return
@@ -804,7 +815,8 @@ func sendPush(to, from string) {
 			"sound": "default",
 		},
 		"data": map[string]string{
-			"from": from,
+			"from":   from,
+			"chatId": chatId,
 		},
 	}
 
@@ -820,7 +832,9 @@ func sendPush(to, from string) {
 		return
 	}
 	defer resp.Body.Close()
-	log.Printf("Push sent to %s, status: %s\n", to, resp.Status)
+
+	respBody, _ := io.ReadAll(resp.Body)
+	log.Printf("Push sent to %s, status: %s, response: %s\n", to, resp.Status, string(respBody))
 }
 
 func jsonTime(v interface{}) int64 {
