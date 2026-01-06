@@ -10,8 +10,6 @@
   import PermissionsDialog from './components/PermissionsDialog.svelte'
   import pkg from '../package.json'
   import { inject } from '@vercel/analytics'
-  // @ts-ignore - Vercel Speed Insights types
-  import { injectSpeedInsights } from '@vercel/speed-insights'
   
   // Composables
   import * as PermissionsLib from './lib/usePermissions'
@@ -1158,7 +1156,6 @@
     
     // Initialize Vercel Analytics and Speed Insights
     inject()
-    injectSpeedInsights()
     
     // Show loading screen and request permissions (async, non-blocking)
     initializeApp()

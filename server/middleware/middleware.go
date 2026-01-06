@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -33,30 +34,53 @@ func (rw *statusResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin == "" {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-		} else {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
+		allowedOrigins := os.Getenv("CORS_ORIGIN") // comma-separated list or "*"
+		if allowedOrigins == "" {
+			allowedOrigins = "*"
 		}
 
-		w.Header().Set(
-			"Access-Control-Allow-Methods",
-			"POST, GET, OPTIONS, PUT, DELETE",
-		)
-		w.Header().Set(
-			"Access-Control-Allow-Headers",
-			"Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, X-ByteChat-ID, X-Session-Token",
-		)
-		w.Header().Set(
-			"Access-Control-Allow-Credentials",
-			"true",
-		)
-		w.Header().Set(
-			"Access-Control-Max-Age",
-			"86400",
-		)
+		allowed := "*"
+		if allowedOrigins != "*" && origin != "" {
+			for _, o := range strings.Split(allowedOrigins, ",") {
+				if strings.TrimSpace(o) == origin {
+					allowed = origin
+					break
+				}
+			}
+		} else if origin != "" {
+			// echo origin by default for non-configured setups
+			allowed = origin
+		}
+
+		w.Header().Set("Access-Control-Allow-Origin", allowed)
+		w.Header().Add("Vary", "Origin")
+
+		// Allow-Methods: echo requested or provide defaults
+		reqMethod := r.Header.Get("Access-Control-Request-Method")
+		if reqMethod != "" {
+			w.Header().Set("Access-Control-Allow-Methods", reqMethod)
+		} else {
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		}
+
+		// Allow-Headers: echo requested or provide defaults
+		reqHeaders := r.Header.Get("Access-Control-Request-Headers")
+		if reqHeaders != "" {
+			w.Header().Set("Access-Control-Allow-Headers", reqHeaders)
+		} else {
+			w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, Authorization, X-ByteChat-ID, X-Session-Token")
+		}
+
+		// Credentials only if not wildcard and explicitly enabled
+		if allowed != "*" && strings.EqualFold(os.Getenv("CORS_ALLOW_CREDENTIALS"), "true") {
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
+
+		w.Header().Set("Access-Control-Max-Age", "86400")
+		w.Header().Set("Access-Control-Expose-Headers", "Content-Type, Content-Length")
 
 		if r.Method == "OPTIONS" {
+			// Preflight response
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}

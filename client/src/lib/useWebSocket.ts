@@ -98,11 +98,31 @@ export function connectWebSocket(
     try {
       // Decrypt message
       let text = ''
-      if (keypair && keysMap[msg.from] && msg.cipher && msg.nonce) {
+
+      // Select appropriate cipher/nonce, including group-specific when available
+      let cipher: any = msg.cipher
+      let nonce: any = msg.nonce
+      if (msg.groupCiphers && msg.groupCiphers[id]) {
+        cipher = msg.groupCiphers[id]?.cipher
+        nonce = msg.groupCiphers[id]?.nonce
+      }
+
+      const hasValidParams = (
+        keypair && keysMap[msg.from] &&
+        typeof cipher === 'string' && typeof nonce === 'string' &&
+        cipher.length > 0 && nonce.length > 0
+      )
+
+      if (hasValidParams) {
         const decrypted = await (cryptoPool
-          ? cryptoPool.decrypt(keypair.secretKey, keysMap[msg.from], msg.cipher, msg.nonce)
-          : decrypt(keypair.secretKey, keysMap[msg.from], msg.cipher, msg.nonce))
+          ? cryptoPool.decrypt(keypair.secretKey, keysMap[msg.from], cipher, nonce)
+          : decrypt(keypair.secretKey, keysMap[msg.from], cipher, nonce))
         text = decrypted || text
+      } else if (cipher || nonce) {
+        console.warn('Skipping decryption due to invalid params', {
+          sk: typeof keypair?.secretKey, pk: typeof keysMap[msg.from],
+          cipher: typeof cipher, nonce: typeof nonce
+        })
       }
       
       const msgObj: Message = {
