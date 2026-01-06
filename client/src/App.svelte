@@ -45,12 +45,19 @@
   let updateAvailable = false
   let updateUrl = ''
   let isUpdating = false
+  let isRequestingNotifications = false
+
+  let audioCtx: AudioContext | null = null
 
   function playPing() {
     try {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
       if (!AudioContextClass) return
-      const audioCtx = new AudioContextClass()
+      
+      if (!audioCtx) {
+        audioCtx = new AudioContextClass()
+      }
+      
       if (audioCtx.state === 'suspended') audioCtx.resume()
       
       const oscillator = audioCtx.createOscillator()
@@ -73,11 +80,17 @@
 
   async function requestNotificationPermission() {
     if (Capacitor.isNativePlatform()) {
-      const status = await LocalNotifications.checkPermissions()
-      notificationPermission = status.display
-      if (status.display !== 'granted') {
-        const res = await LocalNotifications.requestPermissions()
-        notificationPermission = res.display
+      if (isRequestingNotifications) return
+      isRequestingNotifications = true
+      try {
+        const status = await LocalNotifications.checkPermissions()
+        notificationPermission = status.display
+        if (status.display !== 'granted') {
+          const res = await LocalNotifications.requestPermissions()
+          notificationPermission = res.display
+        }
+      } finally {
+        isRequestingNotifications = false
       }
     } else if ('Notification' in window) {
       notificationPermission = Notification.permission
@@ -141,29 +154,44 @@
 
   async function registerPush() {
     if (!Capacitor.isNativePlatform()) return
+    if (isRequestingNotifications) return
+    isRequestingNotifications = true
 
-    let perm = await PushNotifications.checkPermissions()
-    if (perm.receive !== 'granted') {
-      perm = await PushNotifications.requestPermissions()
-    }
+    try {
+      let perm = await PushNotifications.checkPermissions()
+      if (perm.receive !== 'granted') {
+        perm = await PushNotifications.requestPermissions()
+      }
 
-    if (perm.receive !== 'granted') return
+      if (perm.receive !== 'granted') {
+        isRequestingNotifications = false
+        return
+      }
 
-    await PushNotifications.register()
-
-    PushNotifications.addListener('registration', async (token) => {
-      console.log('Push registration success, token: ' + token.value)
-      await fetch(`${API_URL}/push-token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, token: token.value, sessionToken })
+      // Add listener BEFORE registering to avoid race conditions
+      PushNotifications.addListener('registration', async (token) => {
+        console.log('Push registration success, token: ' + token.value)
+        await fetch(`${API_URL}/push-token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, token: token.value, sessionToken })
+        })
       })
-    })
 
-    PushNotifications.addListener('registrationError', (error: any) => {
-      console.error('Error on registration: ' + JSON.stringify(error))
-    })
+      PushNotifications.addListener('registrationError', (error: any) => {
+        console.error('Error on registration: ' + JSON.stringify(error))
+      })
 
+      // Small delay after permission grant before registration
+      // helps prevent native crashes on some Android versions
+      await new Promise(r => setTimeout(r, 500))
+      await PushNotifications.register()
+    } catch (e) {
+      console.error('Push registration error:', e)
+    } finally {
+      isRequestingNotifications = false
+    }
+    
     PushNotifications.addListener('pushNotificationReceived', (notification) => {
       console.log('Push received: ' + JSON.stringify(notification))
     })
@@ -180,8 +208,9 @@
 
   function handleAuthSuccess(e: any) {
     const data = e.detail
+    if (!data) return
     id = data.id
-    sessionToken = data.token
+    sessionToken = data.token || ''
     if (data.type === 'pgp') {
       pgpPrivateKey = data.pgpPrivateKey
       pgpPassphrase = data.pgpPassphrase
@@ -387,6 +416,9 @@
         const parts = fileData.split(',');
         const mime = parts[0].match(/:(.*?);/)?.[1] || '';
         const b64 = parts[1];
+        
+        // Use a more memory-efficient way to decode base64 if possible
+        // or at least wrap it.
         const binary = atob(b64);
         const array = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
@@ -541,14 +573,17 @@
 
   async function checkForUpdates() {
     try {
+      console.log('Checking for updates... current version:', version)
       const res = await fetch('https://api.github.com/repos/0xbyteptr/bytechat/releases/latest')
       if (res.ok) {
         const data = await res.json()
         const latestVersion = data.tag_name.replace('v', '')
+        console.log('Latest version available:', latestVersion)
         if (latestVersion !== version) {
           updateAvailable = true
           const apkAsset = data.assets.find((a: any) => a.name.endsWith('.apk'))
           updateUrl = apkAsset ? apkAsset.browser_download_url : data.html_url
+          console.log('Update found! URL:', updateUrl)
         }
       }
     } catch (e) {
@@ -566,8 +601,18 @@
 
     try {
       isUpdating = true
-      const filename = `bytechat-${Date.now()}.apk`
+      const filename = `bytechat_update.apk`
       
+      console.log('Starting download from:', updateUrl)
+      
+      // Delete old file if exists
+      try {
+        await Filesystem.deleteFile({
+          path: filename,
+          directory: Directory.Data
+        })
+      } catch (e) {}
+
       const download = await Filesystem.downloadFile({
         url: updateUrl,
         path: filename,
@@ -575,9 +620,18 @@
       })
 
       if (download.path) {
+        console.log('Download complete:', download.path)
+        
+        // On Android, we might need to convert the path to a proper URI
+        let finalPath = download.path
+        if (Capacitor.getPlatform() === 'android' && !finalPath.startsWith('file://')) {
+          finalPath = 'file://' + finalPath
+        }
+
         await FileOpener.open({
-          filePath: download.path,
-          contentType: 'application/vnd.android.package-archive'
+          filePath: finalPath,
+          contentType: 'application/vnd.android.package-archive',
+          openWithDefault: true
         })
       }
     } catch (e: any) {
@@ -589,59 +643,66 @@
   }
 
   onMount(()=>{
-    checkForUpdates()
-    if ('Notification' in window) {
-      notificationPermission = Notification.permission;
-    }
-    
-    const handleVisibilityChange = () => {
-      isAppVisible = document.visibilityState === 'visible'
-    }
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-
-    const saved = localStorage.getItem('bytechat_session')
-    if(saved) {
-      try {
-        const s = JSON.parse(saved)
-        id = s.id
-        sessionToken = s.sessionToken || ''
-        pgpPrivateKey = s.pgpPrivateKey || ''
-        pgpPassphrase = s.pgpPassphrase || ''
-        keypair = s.keypair || null
-        keys = s.keys || {}
-        messagesMap = s.messagesMap || {}
-        unreadMap = s.unreadMap || {}
-        if (id && sessionToken && (pgpPrivateKey || keypair)) {
-          isLoggedIn = true
-          connect()
-          registerPush()
-        }
-      } catch (e) {
-        console.error('Failed to restore session', e)
+    try {
+      checkForUpdates()
+      if ('Notification' in window) {
+        notificationPermission = Notification.permission;
       }
+      
+      const handleVisibilityChange = () => {
+        isAppVisible = document.visibilityState === 'visible'
+      }
+      document.addEventListener('visibilitychange', handleVisibilityChange)
+
+      const saved = localStorage.getItem('bytechat_session')
+      if(saved) {
+        try {
+          const s = JSON.parse(saved)
+          id = s.id
+          sessionToken = s.sessionToken || ''
+          pgpPrivateKey = s.pgpPrivateKey || ''
+          pgpPassphrase = s.pgpPassphrase || ''
+          keypair = s.keypair || null
+          keys = s.keys || {}
+          messagesMap = s.messagesMap || {}
+          unreadMap = s.unreadMap || {}
+          if (id && sessionToken && (pgpPrivateKey || keypair)) {
+            isLoggedIn = true
+            connect()
+            registerPush()
+          }
+        } catch (e) {
+          console.error('Failed to restore session', e)
+        }
+      }
+    } catch (err) {
+      console.error('Fatal onMount error:', err)
     }
   })
 
+  let saveTimeout: any = null
   $: if(isLoggedIn) {
-    try {
-      // To avoid QuotaExceededError, we strip large file data when saving to localStorage
-      // Users can still see them in the current session, but they won't persist if too large
-      const strippedMessages = { ...messagesMap }
-      Object.keys(strippedMessages).forEach(contactId => {
-        strippedMessages[contactId] = strippedMessages[contactId].map(m => {
-          if (m.file && m.file.fileData && m.file.fileData.length > 100000) {
-            return { ...m, file: { ...m.file, fileData: '' }, text: m.text + ' (File too large to persist)' }
-          }
-          return m
+    if (saveTimeout) clearTimeout(saveTimeout)
+    saveTimeout = setTimeout(() => {
+      try {
+        // To avoid QuotaExceededError, we strip large file data when saving to localStorage
+        const strippedMessages = { ...messagesMap }
+        Object.keys(strippedMessages).forEach(contactId => {
+          strippedMessages[contactId] = strippedMessages[contactId].map(m => {
+            if (m.file && m.file.fileData && m.file.fileData.length > 100000) {
+              return { ...m, file: { ...m.file, fileData: '' }, text: m.text + ' (File too large to persist)' }
+            }
+            return m
+          })
         })
-      })
 
-      localStorage.setItem('bytechat_session', JSON.stringify({
-        id, sessionToken, pgpPrivateKey, pgpPassphrase, keypair, keys, messagesMap: strippedMessages, unreadMap
-      }))
-    } catch (e) {
-      console.warn('LocalStorage quota exceeded, session not fully saved', e)
-    }
+        localStorage.setItem('bytechat_session', JSON.stringify({
+          id, sessionToken, pgpPrivateKey, pgpPassphrase, keypair, keys, messagesMap: strippedMessages, unreadMap
+        }))
+      } catch (e) {
+        console.warn('LocalStorage quota exceeded, session not fully saved', e)
+      }
+    }, 1000)
   }
 
   // small mock contacts list for UI
