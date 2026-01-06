@@ -10,6 +10,8 @@
     editedAt?: number;
     deleted?: boolean;
     replyTo?: { messageId: string; text: string; from: string };
+    read?: boolean;
+    readAt?: number;
   }
   export let isOwn = false
   
@@ -90,7 +92,11 @@
         <span class="edited">edited</span>
       {/if}
       {#if isOwn}
-        <span class="status">✓✓</span>
+        {#if msg.read}
+          <span class="status" title="Read at {fmt(msg.readAt)}">✓✓</span>
+        {:else}
+          <span class="status">✓</span>
+        {/if}
       {/if}
     </div>
     

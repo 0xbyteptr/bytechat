@@ -9,6 +9,8 @@ export interface Message {
   editedAt?: number
   deleted?: boolean
   replyTo?: { messageId: string; text: string; from: string }
+  read?: boolean
+  readAt?: number
 }
 
 export const messagesMap = writable<Record<string, Message[]>>({})

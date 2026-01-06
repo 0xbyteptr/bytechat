@@ -206,6 +206,15 @@
         })
         .catch(err => console.warn('Failed to load cached messages:', err))
     }
+    
+    // Send read receipts for unread messages from this contact
+    if (messagesMap[contact]) {
+      messagesMap[contact].forEach(msg => {
+        if (msg.from === contact && !msg.read && msg.messageId) {
+          sendReadReceipt(contact, msg.messageId)
+        }
+      })
+    }
   }
 
   $: if (contact && unreadMap[contact]) {
@@ -297,6 +306,24 @@
                 : m
             )
           }
+        }
+        return
+      }
+      
+      // Handle read receipt
+      if (msg.type === 'read') {
+        const chatWith = msg.from
+        if (messagesMap[chatWith] && msg.messageId) {
+          messagesMap = {
+            ...messagesMap,
+            [chatWith]: messagesMap[chatWith].map(m => 
+              (m.messageId === msg.messageId)
+                ? { ...m, read: true, readAt: msg.readAt || Date.now() } 
+                : m
+            )
+          }
+          // Update cache
+          MessageCacheLib.cacheMessage(chatWith, messagesMap[chatWith].find(m => m.messageId === msg.messageId)).catch(err => console.warn('Failed to cache read receipt:', err))
         }
         return
       }
@@ -495,6 +522,17 @@
     } finally {
       pendingKeys.delete(name)
     }
+  }
+
+  function sendReadReceipt(from: string, messageId: string) {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !messageId) return
+    
+    ws.send(JSON.stringify({
+      type: 'read',
+      messageId: messageId,
+      from: from,
+      readAt: Date.now()
+    }))
   }
 
   async function sendTo(to:string, text:string, replyTo?: { messageId: string; text: string; from: string }) {

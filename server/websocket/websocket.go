@@ -285,6 +285,26 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		// Handle read receipt
+		if msgType, ok := msg["type"].(string); ok && msgType == "read" {
+			from, _ := msg["from"].(string)
+			if from == "" {
+				continue
+			}
+
+			msg["from"] = id
+			msg["readAt"] = time.Now().UnixMilli()
+
+			// Forward to sender
+			clientsMux.RLock()
+			senderClient, ok := clients[from]
+			clientsMux.RUnlock()
+			if ok {
+				senderClient.Send(msg)
+			}
+			continue
+		}
+
 		// Handle VoIP signaling messages (call-offer, call-answer, call-ice-candidate, call-end)
 		if msgType, ok := msg["type"].(string); ok && strings.HasPrefix(msgType, "call-") {
 			to, _ := msg["to"].(string)
