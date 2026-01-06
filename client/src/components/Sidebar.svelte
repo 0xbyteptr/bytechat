@@ -138,7 +138,7 @@
         <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
           <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.47 4.34-3.1 8.24-7 9.43V12H5V6.3l7-3.11v8.8z" />
         </svg>
-        <span>Secure PGP</span>
+        <span>Secure E2EE</span>
       </div>
       <span class="text-[10px] font-mono">v{version}</span>
     </div>

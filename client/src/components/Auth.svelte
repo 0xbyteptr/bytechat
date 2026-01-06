@@ -1,7 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte'
   import { generateKeyPair, decrypt } from '../lib/crypto'
-  import { getPublicKeyFromPrivate, decryptPGP } from '../lib/pgp'
   import { Capacitor } from '@capacitor/core'
   import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
   import { FileOpener } from '@capacitor-community/file-opener'
@@ -10,63 +9,11 @@
   const API_URL = import.meta.env.VITE_API_URL || (Capacitor.isNativePlatform() ? 'https://api.byteptr.xyz' : '')
 
   export let id = ''
-  export let pgpPrivateKey = ''
-  export let pgpPassphrase = ''
   export let keypair: {publicKey:string, secretKey:string} | null = null
   let naclSecretKey = ''
 
-  let mode: 'login-pgp' | 'login-nacl' | 'register' = 'login-pgp'
+  let mode: 'login-nacl' | 'register' = 'login-nacl'
   let loading = false
-
-  async function loginWithPGP() {
-    const trimmedId = id.trim()
-    if (!trimmedId || !pgpPrivateKey) {
-      alert('ID and PGP Private Key are required')
-      return
-    }
-    loading = true
-    
-    // Defer heavy operations to prevent UI freeze
-    await new Promise(resolve => setTimeout(resolve, 50))
-    
-    try {
-      const pubKey = await getPublicKeyFromPrivate(pgpPrivateKey)
-      
-      await new Promise(resolve => setTimeout(resolve, 10))
-      
-      const resChallenge = await fetch(`${API_URL}/challenge`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: trimmedId, publicKey: pubKey })
-      })
-      if (!resChallenge.ok) throw new Error(await resChallenge.text())
-      const { encryptedChallenge } = await resChallenge.json()
-      
-      if (!encryptedChallenge.includes('-----BEGIN PGP')) {
-        throw new Error("This ID is registered with Nacl. Please use Nacl Login tab.")
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 10))
-      const code = await decryptPGP(pgpPrivateKey, encryptedChallenge, pgpPassphrase) as string
-      
-      await new Promise(resolve => setTimeout(resolve, 10))
-      const res = await fetch(`${API_URL}/keys`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: trimmedId, code })
-      })
-      if (res.ok) {
-        const { token } = await res.json()
-        dispatch('authSuccess', { id: trimmedId, publicKey: pubKey, type: 'pgp', pgpPrivateKey, pgpPassphrase, token })
-      } else {
-        alert('Login failed: ' + await res.text())
-      }
-    } catch (e: any) {
-      alert('Error: ' + e.message)
-    } finally {
-      loading = false
-    }
-  }
 
   async function loginWithNacl() {
     const trimmedId = id.trim()
@@ -85,10 +32,6 @@
       const resKey = await fetch(`${API_URL}/keys?id=${encodeURIComponent(trimmedId)}`)
       if (!resKey.ok) throw new Error("User not found. Please register first.")
       const { publicKey: pubKey } = await resKey.json()
-
-      if (pubKey.includes('-----BEGIN PGP')) {
-        throw new Error("This ID is registered with PGP. Please use PGP Login tab.")
-      }
 
       await new Promise(resolve => setTimeout(resolve, 10))
       
@@ -199,8 +142,7 @@
     </div>
 
     <div class="tabs">
-      <button class:active={mode === 'login-pgp'} on:click={() => mode = 'login-pgp'}>PGP Login</button>
-      <button class:active={mode === 'login-nacl'} on:click={() => mode = 'login-nacl'}>Nacl Login</button>
+      <button class:active={mode === 'login-nacl'} on:click={() => mode = 'login-nacl'}>Login</button>
       <button class:active={mode === 'register'} on:click={() => mode = 'register'}>Register</button>
     </div>
 
@@ -210,25 +152,13 @@
         <input id="id" placeholder="e.g. alice" bind:value={id} />
       </div>
 
-      {#if mode === 'login-pgp'}
-        <div class="input-group">
-          <label for="pgp">PGP Private Key (Armored)</label>
-          <textarea id="pgp" placeholder="-----BEGIN PGP PRIVATE KEY BLOCK-----..." bind:value={pgpPrivateKey} rows={6}></textarea>
-        </div>
-        <div class="input-group">
-          <label for="pass">Passphrase (if any)</label>
-          <input id="pass" type="password" placeholder="Your PGP passphrase" bind:value={pgpPassphrase} />
-        </div>
-        <button class="btn-primary" on:click={loginWithPGP} disabled={loading || !id || !pgpPrivateKey}>
-          {loading ? 'Verifying...' : 'Login with PGP'}
-        </button>
-      {:else if mode === 'login-nacl'}
+      {#if mode === 'login-nacl'}
         <div class="input-group">
           <label for="nacl-sk">Nacl Secret Key (Base64)</label>
           <input id="nacl-sk" placeholder="Your Nacl secret key" bind:value={naclSecretKey} />
         </div>
         <button class="btn-purple" on:click={loginWithNacl} disabled={loading || !id || !naclSecretKey}>
-          {loading ? 'Verifying...' : 'Login with Nacl'}
+          {loading ? 'Verifying...' : 'Login'}
         </button>
       {:else}
         <div class="nacl-box">
@@ -362,7 +292,7 @@
     margin-left: 0.25rem;
   }
 
-  input, textarea {
+  input {
     width: 100%;
     background: var(--bg);
     border: 1px solid var(--surface-lighter);
@@ -373,7 +303,7 @@
     transition: border-color 0.2s, box-shadow 0.2s;
   }
 
-  input:focus, textarea:focus {
+  input:focus {
     outline: none;
     border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(203, 166, 247, 0.1);
@@ -414,7 +344,7 @@
     border: 1px solid rgba(255,255,255,0.05);
   }
 
-  .btn-primary, .btn-purple, .btn-secondary {
+  .btn-purple, .btn-secondary {
     width: 100%;
     padding: 1rem;
     border-radius: 12px;
@@ -429,23 +359,16 @@
     gap: 0.5rem;
   }
 
-  .btn-primary { background: var(--accent); color: var(--bg); }
   .btn-purple { background: #cba6f7; color: var(--bg); }
   .btn-secondary { background: var(--surface-lighter); color: var(--fg); }
 
-  .btn-primary:hover, .btn-purple:hover { 
+  .btn-purple:hover { 
     opacity: 0.9;
     transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(203, 166, 247, 0.2);
   }
 
-  .btn-primary:active, .btn-purple:active { transform: translateY(0); }
-
-  .btn-primary:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    transform: none;
-  }
+  .btn-purple:active { transform: translateY(0); }
 
   .auth-footer {
     margin-top: 2.5rem;

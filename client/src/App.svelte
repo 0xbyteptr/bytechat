@@ -1,7 +1,6 @@
 <script lang="ts">
   import { generateKeyPair, encrypt, decrypt } from './lib/crypto'
   import { connectWS } from './lib/ws'
-  import { generatePGPKey, signMessage, getPublicKeyInfo, encryptPGP, decryptPGP, getPublicKeyFromPrivate } from './lib/pgp'
   import { onMount } from 'svelte'
   import Sidebar from './components/Sidebar.svelte'
   import ChatWindow from './components/ChatWindow.svelte'
@@ -12,14 +11,15 @@
   import { Capacitor } from '@capacitor/core'
   import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
   import { FileOpener } from '@capacitor-community/file-opener'
+  import { inject } from '@vercel/analytics'
+  // @ts-ignore - Vercel Speed Insights types
+  import { injectSpeedInsights } from '@vercel/speed-insights'
 
   const API_URL = import.meta.env.VITE_API_URL || (Capacitor.isNativePlatform() ? 'https://api.byteptr.xyz' : '')
   const MAX_FILE_SIZE = parseInt(import.meta.env.VITE_MAX_FILE_SIZE || '52428800')
   const version = pkg.version
 
   let id = ''
-  let pgpPrivateKey = ''
-  let pgpPassphrase = ''
   let contact: string | null = null
   let keypair: {publicKey:string, secretKey:string} | null = null
   let keys: Record<string,string> = {}
@@ -152,10 +152,6 @@
     unreadMap = { ...unreadMap, [contact]: 0 }
   }
 
-  function isPGP(key: string) {
-    return key && key.includes('-----BEGIN PGP')
-  }
-
   async function registerPush() {
     if (!Capacitor.isNativePlatform()) return
     if (isRequestingNotifications) return
@@ -215,14 +211,8 @@
     if (!data) return
     id = data.id
     sessionToken = data.token || ''
-    if (data.type === 'pgp') {
-      pgpPrivateKey = data.pgpPrivateKey
-      pgpPassphrase = data.pgpPassphrase
-      keys = { ...keys, [id]: data.publicKey }
-    } else {
-      keypair = data.keypair
-      keys = { ...keys, [id]: data.publicKey }
-    }
+    keypair = data.keypair
+    keys = { ...keys, [id]: data.publicKey }
     isLoggedIn = true
     showSidebar = true
     connect()
@@ -230,8 +220,6 @@
     localStorage.setItem('bytechat_session', JSON.stringify({
       id,
       sessionToken,
-      pgpPrivateKey,
-      pgpPassphrase,
       keypair,
       keys
     }))
@@ -302,14 +290,7 @@
           // Defer to prevent UI freeze during decryption
           await new Promise(resolve => setTimeout(resolve, 5))
 
-          if (isPGP(pgpPrivateKey) && cipher.includes('-----BEGIN PGP MESSAGE-----')) {
-            try {
-              return await decryptPGP(pgpPrivateKey, cipher, pgpPassphrase) as string
-            } catch (e) {
-              console.error('PGP decryption failed:', e)
-              return null
-            }
-          } else if (keypair && pk && !pk.includes('-----BEGIN PGP')) {
+          if (keypair && pk) {
             return decrypt(keypair.secretKey, pk, cipher, nonce)
           }
           return null
@@ -329,13 +310,7 @@
         }
 
         if (!text) {
-          if (msg.cipher && msg.cipher.includes('-----BEGIN PGP MESSAGE-----') && !isPGP(pgpPrivateKey)) {
-            text = '<received PGP message but you are using Nacl>'
-          } else if (msg.cipher && !msg.cipher.includes('-----BEGIN PGP MESSAGE-----') && isPGP(pgpPrivateKey) && !keypair) {
-            text = '<received Nacl message but you are using PGP>'
-          } else {
-            text = '<failed to decrypt message>'
-          }
+          text = '<failed to decrypt message>'
         }
         
         let msgObj: any = { from, text, ts: msg.ts || Date.now() }
@@ -431,9 +406,7 @@
           // Defer between encryptions
           await new Promise(resolve => setTimeout(resolve, 5))
           
-          if (isPGP(mpk)) {
-            groupCiphers[member] = { cipher: await encryptPGP(mpk, text) }
-          } else if (keypair) {
+          if (keypair) {
             const { cipher, nonce } = encrypt(keypair.secretKey, mpk, text)
             groupCiphers[member] = { cipher, nonce }
           }
@@ -447,19 +420,7 @@
         // Defer before encryption
         await new Promise(resolve => setTimeout(resolve, 5))
         
-        if (isPGP(pk)) {
-          // Encrypt for both recipient and self so history is readable
-          let encryptionKeys = [pk]
-          if (isPGP(pgpPrivateKey)) {
-            try {
-              const myPk = await getPublicKeyFromPrivate(pgpPrivateKey)
-              if (myPk && myPk !== pk) encryptionKeys.push(myPk)
-            } catch (e) {}
-          }
-          const cipher = await encryptPGP(encryptionKeys, text)
-          payload.cipher = cipher
-          payload.nonce = ''
-        } else if (keypair) {
+        if (keypair) {
           const { cipher, nonce } = encrypt(keypair.secretKey, pk, text)
           payload.cipher = cipher
           payload.nonce = nonce
@@ -546,10 +507,7 @@
       await new Promise(resolve => setTimeout(resolve, 5))
 
       let payload: any = { to }
-      if (isPGP(pk)) {
-        payload.cipher = await encryptPGP(pk, payloadToEncrypt)
-        payload.nonce = ''
-      } else if (keypair) {
+      if (keypair) {
         const { cipher, nonce } = encrypt(keypair.secretKey, pk, payloadToEncrypt)
         payload.cipher = cipher
         payload.nonce = nonce
@@ -610,9 +568,7 @@
     let content = ''
     let filename = `bytechat_${id}_keys.txt`
     
-    if (pgpPrivateKey) {
-      content = `ByteChat PGP Private Key for ${id}\n\n${pgpPrivateKey}`
-    } else if (keypair) {
+    if (keypair) {
       content = `ByteChat Nacl Keys for ${id}\n\nPublic Key: ${keypair.publicKey}\nSecret Key: ${keypair.secretKey}`
     } else {
       alert('No keys found to export')
@@ -664,8 +620,6 @@
     id = ''
     sessionToken = ''
     keypair = null
-    pgpPrivateKey = ''
-    pgpPassphrase = ''
     if (ws) {
       ws.close()
       ws = null
@@ -796,6 +750,10 @@
   }
 
   onMount(()=>{
+    // Initialize Vercel Analytics and Speed Insights
+    inject()
+    injectSpeedInsights()
+    
     try {
       checkForUpdates()
       fetchGroups()
@@ -818,13 +776,11 @@
           const s = JSON.parse(saved)
           id = s.id
           sessionToken = s.sessionToken || ''
-          pgpPrivateKey = s.pgpPrivateKey || ''
-          pgpPassphrase = s.pgpPassphrase || ''
           keypair = s.keypair || null
           keys = s.keys || {}
           messagesMap = s.messagesMap || {}
           unreadMap = s.unreadMap || {}
-          if (id && sessionToken && (pgpPrivateKey || keypair)) {
+          if (id && sessionToken && keypair) {
             isLoggedIn = true
             validateSession()
             connect()
@@ -868,7 +824,7 @@
         })
 
         localStorage.setItem('bytechat_session', JSON.stringify({
-          id, sessionToken, pgpPrivateKey, pgpPassphrase, keypair, keys, messagesMap: strippedMessages, unreadMap
+          id, sessionToken, keypair, keys, messagesMap: strippedMessages, unreadMap
         }))
       } catch (e) {
         console.warn('LocalStorage quota exceeded, session not fully saved', e)
@@ -1061,7 +1017,7 @@
 
 <div class="flex flex-col h-screen w-screen overflow-hidden bg-bg text-fg">
   {#if !isLoggedIn}
-    <Auth {id} {pgpPrivateKey} {pgpPassphrase} {keypair} on:authSuccess={handleAuthSuccess} />
+    <Auth {id} {keypair} on:authSuccess={handleAuthSuccess} />
   {:else}
     <main class="flex flex-1 overflow-hidden relative bg-bg">
       <div class="sidebar-wrapper" class:hidden-mobile={!showSidebar}>
