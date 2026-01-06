@@ -21,6 +21,7 @@ import (
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/gorilla/websocket"
+	"github.com/joho/godotenv"
 	"golang.org/x/crypto/nacl/box"
 )
 
@@ -74,6 +75,17 @@ var (
 )
 
 func init() {
+	// Try loading from current directory, then from /server directory if we're in the root
+	if err := godotenv.Load(); err != nil {
+		if err2 := godotenv.Load("server/.env"); err2 == nil {
+			log.Println("Loaded .env from server/.env")
+		} else {
+			log.Println("No .env file found, using system environment variables")
+		}
+	} else {
+		log.Println("Loaded .env from current directory")
+	}
+
 	pub, priv, err := box.GenerateKey(rand.Reader)
 	if err != nil {
 		log.Fatal(err)

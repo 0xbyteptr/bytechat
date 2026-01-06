@@ -4,6 +4,8 @@ go 1.22.0
 
 require github.com/gorilla/websocket v1.5.0
 
+require github.com/joho/godotenv v1.5.1
+
 require (
 	github.com/ProtonMail/go-crypto v1.3.0 // direct
 	github.com/cloudflare/circl v1.6.0 // indirect

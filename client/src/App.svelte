@@ -14,6 +14,7 @@
   import { FileOpener } from '@capacitor-community/file-opener'
 
   const API_URL = import.meta.env.VITE_API_URL || (Capacitor.isNativePlatform() ? 'https://api.byteptr.xyz' : '')
+  const MAX_FILE_SIZE = parseInt(import.meta.env.VITE_MAX_FILE_SIZE || '52428800')
   const version = pkg.version
 
   let id = ''
