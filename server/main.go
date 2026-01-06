@@ -302,6 +302,7 @@ func main() {
 	mux.HandleFunc("/keys", keysHandler) // POST to register, GET to fetch
 	mux.HandleFunc("/push-token", pushTokenHandler)
 	mux.HandleFunc("/groups", groupsHandler)
+	mux.HandleFunc("/validate-session", validateSessionHandler)
 	mux.HandleFunc("/cdn/upload", uploadHandler)
 	mux.HandleFunc("/cdn/file/", downloadHandler)
 	mux.HandleFunc("/ws", wsHandler)
@@ -352,12 +353,18 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(srw, r)
 
 		uri := r.RequestURI
-		if strings.Contains(uri, "token=") {
+		if strings.Contains(strings.ToLower(uri), "token") {
 			u, err := url.ParseRequestURI(uri)
 			if err == nil {
 				q := u.Query()
-				if q.Get("token") != "" {
-					q.Set("token", "REDACTED")
+				redacted := false
+				for key := range q {
+					if strings.Contains(strings.ToLower(key), "token") {
+						q.Set(key, "REDACTED")
+						redacted = true
+					}
+				}
+				if redacted {
 					u.RawQuery = q.Encode()
 					uri = u.String()
 				}
@@ -365,6 +372,16 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		}
 		log.Printf("%s %s %d %s %s", r.Method, uri, srw.status, r.RemoteAddr, time.Since(start))
 	})
+}
+
+func validateSessionHandler(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	token := r.URL.Query().Get("token")
+	if id == "" || !isValidToken(id, token) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func isPGP(key string) bool {
@@ -842,8 +859,8 @@ func sendPush(to, from, chatId string) {
 			Body:  fmt.Sprintf("You have a new message from %s", from),
 		},
 		Data: map[string]string{
-			"from":   from,
-			"chatId": chatId,
+			"senderId": from,
+			"chatId":   chatId,
 		},
 		Token: token,
 	}

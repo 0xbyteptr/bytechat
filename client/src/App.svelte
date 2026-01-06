@@ -200,9 +200,9 @@
 
     PushNotifications.addListener('pushNotificationActionPerformed', (notification) => {
       console.log('Push action performed: ' + JSON.stringify(notification))
-      const from = notification.notification.data.from
-      if (from) {
-        contact = from
+      const chatId = notification.notification.data.chatId || notification.notification.data.senderId
+      if (chatId) {
+        contact = chatId
         showSidebar = false
       }
     })
@@ -604,6 +604,19 @@
     }
   }
 
+  async function validateSession() {
+    if (!isLoggedIn || !id || !sessionToken) return
+    try {
+      const res = await fetch(`${API_URL}/validate-session?id=${encodeURIComponent(id)}&token=${encodeURIComponent(sessionToken)}`)
+      if (res.status === 401) {
+        console.warn('Session invalid, logging out')
+        logout()
+      }
+    } catch (e) {
+      console.error('Failed to validate session', e)
+    }
+  }
+
   function logout() {
     isLoggedIn = false
     id = ''
@@ -736,6 +749,10 @@
       
       const handleVisibilityChange = () => {
         isAppVisible = document.visibilityState === 'visible'
+        if (isAppVisible) {
+          validateSession()
+          fetchGroups()
+        }
       }
       document.addEventListener('visibilitychange', handleVisibilityChange)
 
@@ -753,12 +770,25 @@
           unreadMap = s.unreadMap || {}
           if (id && sessionToken && (pgpPrivateKey || keypair)) {
             isLoggedIn = true
+            validateSession()
             connect()
             registerPush()
           }
         } catch (e) {
           console.error('Failed to restore session', e)
         }
+      }
+
+      const sessionInterval = setInterval(() => {
+        if (isLoggedIn) {
+          validateSession()
+          fetchGroups()
+        }
+      }, 60000)
+
+      return () => {
+        document.removeEventListener('visibilitychange', handleVisibilityChange)
+        clearInterval(sessionInterval)
       }
     } catch (err) {
       console.error('Fatal onMount error:', err)
