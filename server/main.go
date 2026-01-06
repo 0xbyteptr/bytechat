@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -23,8 +22,6 @@ import (
 
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/messaging"
-	"github.com/ProtonMail/go-crypto/openpgp"
-	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
 	"golang.org/x/crypto/nacl/box"
@@ -55,7 +52,7 @@ type Group struct {
 }
 
 var (
-	keyStore      = make(map[string]string)        // id -> publicKey (armored PGP or Base64 Nacl)
+	keyStore      = make(map[string]string)        // id -> publicKey (Base64 Nacl)
 	challenges    = make(map[string]challengeData) // id -> challenge data
 	keysMutex     = sync.RWMutex{}
 	challengesMux = sync.RWMutex{}
@@ -318,7 +315,7 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 	mux.HandleFunc("/challenge", challengeHandler)
-	mux.HandleFunc("/keys", keysHandler) // POST to register, GET to fetch
+	mux.HandleFunc("/keys", keysHandler)
 	mux.HandleFunc("/push-token", pushTokenHandler)
 	mux.HandleFunc("/groups", groupsHandler)
 	mux.HandleFunc("/validate-session", validateSessionHandler)
@@ -403,10 +400,6 @@ func validateSessionHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func isPGP(key string) bool {
-	return strings.Contains(key, "-----BEGIN PGP")
-}
-
 func isValidToken(id, token string) bool {
 	if id == "" || token == "" {
 		return false
@@ -439,45 +432,24 @@ func challengeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If user exists, we MUST use their registered key for the challenge
-	keysMutex.RLock()
-	storedPub, exists := keyStore[body.ID]
-	keysMutex.RUnlock()
-
-	pubToUse := body.PublicKey
-	if exists {
-		pubToUse = storedPub
-	}
-
 	b := make([]byte, 16)
 	rand.Read(b)
 	code := fmt.Sprintf("byte-0x%x", b)
 
-	var encrypted string
-	var err error
-	var serverNaclPub string
-
-	if isPGP(pubToUse) {
-		encrypted, err = encryptPGP(pubToUse, code)
-	} else {
-		var nonce string
-		encrypted, nonce, err = encryptNacl(pubToUse, code)
-		encrypted = encrypted + "|" + nonce // Simple way to send both
-		serverNaclPub = base64.StdEncoding.EncodeToString(serverPub[:])
-	}
-
+	encrypted, nonce, err := encryptNacl(body.PublicKey, code)
 	if err != nil {
 		http.Error(w, "failed to encrypt challenge: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	encrypted = encrypted + "|" + nonce
 
 	challengesMux.Lock()
-	challenges[body.ID] = challengeData{Code: code, PublicKey: pubToUse}
+	challenges[body.ID] = challengeData{Code: code, PublicKey: body.PublicKey}
 	challengesMux.Unlock()
 
 	json.NewEncoder(w).Encode(map[string]string{
 		"encryptedChallenge": encrypted,
-		"serverPublicKey":    serverNaclPub,
+		"serverPublicKey":    base64.StdEncoding.EncodeToString(serverPub[:]),
 	})
 }
 
@@ -502,47 +474,6 @@ func encryptNacl(publicKeyBase64, text string) (string, string, error) {
 	return base64.StdEncoding.EncodeToString(out), base64.StdEncoding.EncodeToString(nonce[:]), nil
 }
 
-func encryptPGP(publicKeyArmored, text string) (string, error) {
-	entityList, err := openpgp.ReadArmoredKeyRing(strings.NewReader(publicKeyArmored))
-	if err != nil {
-		return "", err
-	}
-
-	encBuf := new(bytes.Buffer)
-	w, err := armor.Encode(encBuf, "PGP MESSAGE", nil)
-	if err != nil {
-		return "", err
-	}
-
-	plainWriter, err := openpgp.Encrypt(w, entityList, nil, nil, nil)
-	if err != nil {
-		return "", err
-	}
-
-	if _, err := plainWriter.Write([]byte(text)); err != nil {
-		return "", err
-	}
-
-	plainWriter.Close()
-	w.Close()
-
-	return encBuf.String(), nil
-}
-
-func verifyPGPSignature(publicKeyArmored, signatureArmored, message string) error {
-	entityList, err := openpgp.ReadArmoredKeyRing(strings.NewReader(publicKeyArmored))
-	if err != nil {
-		return fmt.Errorf("failed to read public key: %v", err)
-	}
-
-	_, err = openpgp.CheckDetachedSignature(entityList, strings.NewReader(message), strings.NewReader(signatureArmored), nil)
-	if err != nil {
-		return fmt.Errorf("signature verification failed: %v", err)
-	}
-	return nil
-}
-
-// keysHandler: POST {id, publicKey, code}  GET ?id=...
 func keysHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
@@ -635,20 +566,6 @@ func keysHandler(w http.ResponseWriter, r *http.Request) {
 
 		keysMutex.RLock()
 		pk, ok := keyStore[id]
-
-		if !ok && strings.Contains(id, ".") {
-			lastDot := strings.LastIndex(id, ".")
-			baseID := id[:lastDot]
-			pk, ok = keyStore[baseID]
-			log.Printf("Keys GET: %q not found, fallback to baseID %q (found: %v)", id, baseID, ok)
-		}
-
-		// Log search results
-		storeIDs := make([]string, 0, len(keyStore))
-		for k := range keyStore {
-			storeIDs = append(storeIDs, k)
-		}
-		log.Printf("Keys GET request: ID=%q, Success=%v, StoreIDs=%v", id, ok, storeIDs)
 		keysMutex.RUnlock()
 
 		if !ok {
@@ -746,7 +663,6 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set read limit for large file transfers (base64 overhead + JSON)
 	conn.SetReadLimit(maxFileSize * 2)
 
 	c := &client{conn: conn}
@@ -755,7 +671,6 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	clientsMux.Unlock()
 	log.Printf("%s connected via WS from %s\n", id, r.RemoteAddr)
 
-	// Send history to client
 	go func() {
 		history := getHistory(id)
 		for _, sm := range history {
@@ -769,7 +684,6 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			c.send(sm.Msg)
 		}
 
-		// Also send history for all groups I'm in
 		groupsMux.RLock()
 		memberGroups := make([]string, 0)
 		for gid, g := range groups {
@@ -813,12 +727,10 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		// Add timestamp if missing
 		if _, ok := msg["ts"]; !ok {
 			msg["ts"] = time.Now().UnixMilli()
 		}
 
-		// Save to history for both sender and recipient
 		sm := StoredMessage{
 			From: id,
 			To:   to,
@@ -857,7 +769,6 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 		saveToHistory(id, sm)
 		saveToHistory(to, sm)
 
-		// relay to recipient if connected
 		clientsMux.RLock()
 		toClient, ok := clients[to]
 		clientsMux.RUnlock()
@@ -868,7 +779,6 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 				log.Println("relay write error:", err)
 			}
 		} else {
-			// recipient offline — send push notification
 			log.Printf("recipient %s (from %s) offline; sending push notification\n", to, id)
 			sendPush(to, id, id)
 		}
