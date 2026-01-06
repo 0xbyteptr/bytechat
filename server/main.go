@@ -49,6 +49,8 @@ var (
 	clientsMux    = sync.RWMutex{}
 	pushTokens    = make(map[string]string) // id -> fcmToken
 	pushTokensMux = sync.RWMutex{}
+	sessionTokens = make(map[string]string) // id -> sessionToken
+	sessionMux    = sync.RWMutex{}
 	upgrader      = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool { return true },
 	}
@@ -115,11 +117,16 @@ func pushTokenHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		ID    string `json:"id"`
-		Token string `json:"token"`
+		ID           string `json:"id"`
+		Token        string `json:"token"`
+		SessionToken string `json:"sessionToken"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if !isValidToken(body.ID, body.SessionToken) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	savePushToken(body.ID, body.Token)
@@ -219,6 +226,16 @@ func loggingMiddleware(next http.Handler) http.Handler {
 
 func isPGP(key string) bool {
 	return strings.Contains(key, "-----BEGIN PGP")
+}
+
+func isValidToken(id, token string) bool {
+	if id == "" || token == "" {
+		return false
+	}
+	sessionMux.RLock()
+	stored, ok := sessionTokens[id]
+	sessionMux.RUnlock()
+	return ok && stored == token
 }
 
 func challengeHandler(w http.ResponseWriter, r *http.Request) {
@@ -365,7 +382,21 @@ func keysHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			keyStore[body.ID] = body.PublicKey
-			w.WriteHeader(http.StatusCreated)
+
+			// Generate session token
+			tBytes := make([]byte, 32)
+			rand.Read(tBytes)
+			token := base64.StdEncoding.EncodeToString(tBytes)
+
+			sessionMux.Lock()
+			sessionTokens[body.ID] = token
+			sessionMux.Unlock()
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{
+				"status": "success",
+				"token":  token,
+			})
 			return
 		}
 
@@ -397,7 +428,20 @@ func keysHandler(w http.ResponseWriter, r *http.Request) {
 		delete(challenges, body.ID)
 		challengesMux.Unlock()
 
-		w.WriteHeader(http.StatusCreated)
+		// Generate session token
+		tBytes := make([]byte, 32)
+		rand.Read(tBytes)
+		token := base64.StdEncoding.EncodeToString(tBytes)
+
+		sessionMux.Lock()
+		sessionTokens[body.ID] = token
+		sessionMux.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status": "success",
+			"token":  token,
+		})
 		return
 	case http.MethodGet:
 		id := r.URL.Query().Get("id")
@@ -420,11 +464,11 @@ func keysHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// wsHandler upgrades connection and registers the client using ?id=<id>
 func wsHandler(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
-	if id == "" {
-		http.Error(w, "id query param required", http.StatusBadRequest)
+	token := r.URL.Query().Get("token")
+	if id == "" || !isValidToken(id, token) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -604,6 +648,17 @@ func getHistory(id string) []StoredMessage {
 func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.Header.Get("X-ByteChat-ID")
+	token := r.Header.Get("Authorization")
+	if after, ok := strings.CutPrefix(token, "Bearer "); ok {
+		token = after
+	}
+
+	if !isValidToken(id, token) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 

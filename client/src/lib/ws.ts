@@ -1,6 +1,6 @@
 import { Capacitor } from '@capacitor/core'
 
-export function connectWS(id: string, onMessage: (m: any)=>void, onStatus: (s: 'connected' | 'disconnected' | 'connecting') => void) {
+export function connectWS(id: string, token: string, onMessage: (m: any)=>void, onStatus: (s: 'connected' | 'disconnected' | 'connecting') => void) {
   let baseUrl = import.meta.env.VITE_WS_URL
   if (!baseUrl) {
     if (Capacitor.isNativePlatform()) {
@@ -10,7 +10,7 @@ export function connectWS(id: string, onMessage: (m: any)=>void, onStatus: (s: '
       baseUrl = (window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + window.location.host
     }
   }
-  const url = `${baseUrl}/ws?id=${encodeURIComponent(id)}`
+  const url = `${baseUrl}/ws?id=${encodeURIComponent(id)}&token=${encodeURIComponent(token)}`
   
   let ws: WebSocket | null = null
   let forcedClose = false

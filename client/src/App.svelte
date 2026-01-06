@@ -35,6 +35,7 @@
   let unreadMap: Record<string, number> = {}
   let typingMap: Record<string, boolean> = {}
   let isLoggedIn = false
+  let sessionToken = ''
 
   let typingTimeout: any = null
   let showSidebar = true
@@ -155,7 +156,7 @@
       await fetch(`${API_URL}/push-token`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, token: token.value })
+        body: JSON.stringify({ id, token: token.value, sessionToken })
       })
     })
 
@@ -180,6 +181,7 @@
   function handleAuthSuccess(e: any) {
     const data = e.detail
     id = data.id
+    sessionToken = data.token
     if (data.type === 'pgp') {
       pgpPrivateKey = data.pgpPrivateKey
       pgpPassphrase = data.pgpPassphrase
@@ -192,11 +194,19 @@
     showSidebar = true
     connect()
     registerPush()
+    localStorage.setItem('bytechat_session', JSON.stringify({
+      id,
+      sessionToken,
+      pgpPrivateKey,
+      pgpPassphrase,
+      keypair,
+      keys
+    }))
   }
 
   function connect() {
-    if(!id) return
-    ws = connectWS(id, async (msg)=>{
+    if(!id || !sessionToken) return
+    ws = connectWS(id, sessionToken, async (msg)=>{
       if (msg.type === 'typing') {
         typingMap = { ...typingMap, [msg.from]: msg.isTyping }
         return
@@ -378,6 +388,10 @@
       
       const uploadRes = await fetch(`${API_URL}/cdn/upload`, {
         method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${sessionToken}`,
+          'X-ByteChat-ID': id
+        },
         body: formData
       })
       
@@ -559,15 +573,17 @@
       try {
         const s = JSON.parse(saved)
         id = s.id
+        sessionToken = s.sessionToken || ''
         pgpPrivateKey = s.pgpPrivateKey || ''
         pgpPassphrase = s.pgpPassphrase || ''
         keypair = s.keypair || null
         keys = s.keys || {}
         messagesMap = s.messagesMap || {}
         unreadMap = s.unreadMap || {}
-        if (id && (pgpPrivateKey || keypair)) {
+        if (id && sessionToken && (pgpPrivateKey || keypair)) {
           isLoggedIn = true
           connect()
+          registerPush()
         }
       } catch (e) {
         console.error('Failed to restore session', e)
@@ -590,7 +606,7 @@
       })
 
       localStorage.setItem('bytechat_session', JSON.stringify({
-        id, pgpPrivateKey, pgpPassphrase, keypair, keys, messagesMap: strippedMessages, unreadMap
+        id, sessionToken, pgpPrivateKey, pgpPassphrase, keypair, keys, messagesMap: strippedMessages, unreadMap
       }))
     } catch (e) {
       console.warn('LocalStorage quota exceeded, session not fully saved', e)

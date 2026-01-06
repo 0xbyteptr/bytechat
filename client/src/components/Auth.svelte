@@ -44,7 +44,8 @@
         body: JSON.stringify({ id: trimmedId, code })
       })
       if (res.ok) {
-        dispatch('authSuccess', { id: trimmedId, publicKey: pubKey, type: 'pgp', pgpPrivateKey, pgpPassphrase })
+        const { token } = await res.json()
+        dispatch('authSuccess', { id: trimmedId, publicKey: pubKey, type: 'pgp', pgpPrivateKey, pgpPassphrase, token })
       } else {
         alert('Login failed: ' + await res.text())
       }
@@ -94,7 +95,8 @@
         body: JSON.stringify({ id: trimmedId, code })
       })
       if (res.ok) {
-        dispatch('authSuccess', { id: trimmedId, publicKey: pubKey, type: 'nacl', keypair: { publicKey: pubKey, secretKey: naclSecretKey } })
+        const { token } = await res.json()
+        dispatch('authSuccess', { id: trimmedId, publicKey: pubKey, type: 'nacl', keypair: { publicKey: pubKey, secretKey: naclSecretKey }, token })
       } else {
         alert('Login failed: ' + await res.text())
       }
@@ -118,7 +120,8 @@
         body: JSON.stringify({id, publicKey: keypair.publicKey}) 
       })
       if (res.ok) {
-        dispatch('authSuccess', { id, publicKey: keypair.publicKey, type: 'nacl', keypair })
+        const { token } = await res.json()
+        dispatch('authSuccess', { id, publicKey: keypair.publicKey, type: 'nacl', keypair, token })
       } else if (res.status === 409) {
         alert('Error: This ID is already taken. Please choose another one.')
       } else {
