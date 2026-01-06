@@ -654,7 +654,11 @@
   async function validateSession() {
     if (!isLoggedIn || !id || !sessionToken) return
     try {
-      const res = await fetch(`${API_URL}/validate-session?id=${encodeURIComponent(id)}&token=${encodeURIComponent(sessionToken)}`)
+      const res = await fetch(`${API_URL}/validate-session?id=${encodeURIComponent(id)}`, {
+        headers: {
+          'Authorization': `Bearer ${sessionToken}`
+        }
+      })
       if (res.status === 401) {
         console.warn('Session invalid, logging out')
         logout()
@@ -786,7 +790,11 @@
   async function fetchGroups() {
     if (!id || !sessionToken) return
     try {
-      const res = await fetch(`${API_URL}/groups?id=${encodeURIComponent(id)}&token=${encodeURIComponent(sessionToken)}`)
+      const res = await fetch(`${API_URL}/groups?id=${encodeURIComponent(id)}`, {
+        headers: {
+          'Authorization': `Bearer ${sessionToken}`
+        }
+      })
       if (res.status === 401) {
         console.warn('Session invalid, logging out')
         logout()
@@ -802,8 +810,12 @@
     if (!id || !sessionToken) return
     const gid = '#' + Math.random().toString(36).slice(2, 10)
     try {
-      const res = await fetch(`${API_URL}/groups?id=${encodeURIComponent(id)}&token=${encodeURIComponent(sessionToken)}`, {
+      const res = await fetch(`${API_URL}/groups?id=${encodeURIComponent(id)}`, {
         method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${sessionToken}`,
+          'Content-Type': 'application/json'
+        },
         body: JSON.stringify({ id: gid, name, members: [...members, id] })
       })
       if (res.ok) {

@@ -36,6 +36,27 @@ func Init() error {
 	return nil
 }
 
+// GetTokenFromRequest extracts token from Authorization header or X-Session-Token header
+// Falls back to URL query parameter for backward compatibility
+func GetTokenFromRequest(r *http.Request) string {
+	// Try Authorization header (Bearer token)
+	auth := r.Header.Get("Authorization")
+	if auth != "" {
+		if strings.HasPrefix(auth, "Bearer ") {
+			return strings.TrimPrefix(auth, "Bearer ")
+		}
+		return auth
+	}
+
+	// Try X-Session-Token header
+	if token := r.Header.Get("X-Session-Token"); token != "" {
+		return token
+	}
+
+	// Fallback to URL query parameter (deprecated)
+	return r.URL.Query().Get("token")
+}
+
 // IsValidToken validates a session token
 func IsValidToken(id, token string) bool {
 	if id == "" || token == "" {
@@ -211,7 +232,7 @@ func KeysHandler(w http.ResponseWriter, r *http.Request) {
 // ValidateSessionHandler validates a session token
 func ValidateSessionHandler(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
-	token := r.URL.Query().Get("token")
+	token := GetTokenFromRequest(r)
 	if id == "" || !IsValidToken(id, token) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return

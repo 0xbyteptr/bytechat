@@ -13,7 +13,7 @@ import (
 // Handler handles group operations
 func Handler(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
-	token := r.URL.Query().Get("token")
+	token := auth.GetTokenFromRequest(r)
 	if id == "" || !auth.IsValidToken(id, token) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
