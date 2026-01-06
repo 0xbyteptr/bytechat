@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte'
   export let contacts: Array<{id:string, last:string, unread?:number}> = []
+  export let groups: Array<{id:string, name:string, members:string[], admin:string}> = []
   export let selected: string | null = null
   export let version = ''
   export let updateAvailable = false
@@ -14,6 +15,18 @@
     if (!newContactId.trim()) return
     dispatch('addContact', { id: newContactId.trim() })
     newContactId = ''
+  }
+
+  let showCreateGroup = false
+  let groupName = ''
+  let groupMembers = ''
+  function createGroup() {
+    if (!groupName.trim()) return
+    const members = groupMembers.split(',').map(m => m.trim()).filter(m => m)
+    dispatch('createGroup', { name: groupName.trim(), members })
+    groupName = ''
+    groupMembers = ''
+    showCreateGroup = false
   }
 </script>
 
@@ -56,31 +69,61 @@
     </div>
   </div>
 
+  <div class="px-4 flex gap-4 text-[10px] font-black uppercase tracking-widest mb-2 opacity-50">
+    <button class:text-accent={!showCreateGroup} on:click={() => showCreateGroup = false}>Chats</button>
+    <button class:text-accent={showCreateGroup} on:click={() => showCreateGroup = true}>New Group</button>
+  </div>
+
   <div class="contact-list">
-    {#if contacts.length === 0}
-      <div class="empty-contacts">
-        <p>No contacts yet.</p>
-        <p class="text-xs opacity-50">Add someone by their ID to start chatting.</p>
+    {#if showCreateGroup}
+      <div class="p-2 flex flex-col gap-2">
+        <input placeholder="Group Name" class="search-input" bind:value={groupName} />
+        <textarea placeholder="Members (ID1, ID2...)" class="search-input min-h-[80px] py-2" bind:value={groupMembers}></textarea>
+        <button class="add-btn w-full h-10" on:click={createGroup}>Create Group</button>
       </div>
-    {/if}
-    {#each contacts as c}
-      <button 
-        class="contact-item" 
-        class:active={c.id === selected}
-        on:click={() => pick(c.id)}
-      >
-        <div class="avatar">{c.id.slice(0,1).toUpperCase()}</div>
-        <div class="contact-info">
-          <div class="contact-top">
-            <span class="contact-name">{c.id}</span>
-            {#if c.unread}
-              <span class="unread-badge">{c.unread}</span>
-            {/if}
-          </div>
-          <div class="contact-last">{c.last || 'No messages yet'}</div>
+    {:else}
+      {#if contacts.length === 0 && groups.length === 0}
+        <div class="empty-contacts">
+          <p>No chats yet.</p>
+          <p class="text-xs opacity-50">Add someone by their ID to start chatting.</p>
         </div>
-      </button>
-    {/each}
+      {/if}
+      
+      {#each groups as g}
+        <button 
+          class="contact-item" 
+          class:active={g.id === selected}
+          on:click={() => pick(g.id)}
+        >
+          <div class="avatar !bg-accent !text-white">#</div>
+          <div class="contact-info">
+            <div class="contact-top">
+              <span class="contact-name">{g.name}</span>
+            </div>
+            <div class="contact-last">{g.members.length} members: {g.members.join(', ')}</div>
+          </div>
+        </button>
+      {/each}
+
+      {#each contacts as c}
+        <button 
+          class="contact-item" 
+          class:active={c.id === selected}
+          on:click={() => pick(c.id)}
+        >
+          <div class="avatar">{c.id.slice(0,1).toUpperCase()}</div>
+          <div class="contact-info">
+            <div class="contact-top">
+              <span class="contact-name">{c.id}</span>
+              {#if c.unread}
+                <span class="unread-badge">{c.unread}</span>
+              {/if}
+            </div>
+            <div class="contact-last">{c.last || 'No messages yet'}</div>
+          </div>
+        </button>
+      {/each}
+    {/if}
   </div>
 
   <div class="sidebar-footer">

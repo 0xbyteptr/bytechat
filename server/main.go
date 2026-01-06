@@ -40,6 +40,13 @@ type StoredMessage struct {
 	Ts   int64                  `json:"ts"`
 }
 
+type Group struct {
+	ID      string   `json:"id"`
+	Name    string   `json:"name"`
+	Members []string `json:"members"`
+	Admin   string   `json:"admin"`
+}
+
 var (
 	keyStore      = make(map[string]string)        // id -> publicKey (armored PGP or Base64 Nacl)
 	challenges    = make(map[string]challengeData) // id -> challenge data
@@ -52,6 +59,8 @@ var (
 	pushTokensMux = sync.RWMutex{}
 	sessionTokens = make(map[string]string) // id -> sessionToken
 	sessionMux    = sync.RWMutex{}
+	groups        = make(map[string]Group) // id -> Group
+	groupsMux     = sync.RWMutex{}
 	upgrader      = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool { return true },
 	}
@@ -92,6 +101,24 @@ func init() {
 	// Load existing keys
 	loadKeys()
 	loadPushTokens()
+	loadGroups()
+}
+
+func loadGroups() {
+	content, err := os.ReadFile(filepath.Join(dataDir, "groups.json"))
+	if err != nil {
+		return
+	}
+	groupsMux.Lock()
+	json.Unmarshal(content, &groups)
+	groupsMux.Unlock()
+}
+
+func saveGroups() {
+	groupsMux.Lock()
+	data, _ := json.Marshal(groups)
+	groupsMux.Unlock()
+	os.WriteFile(filepath.Join(dataDir, "groups.json"), data, 0644)
 }
 
 func loadPushTokens() {
@@ -200,6 +227,7 @@ func main() {
 	mux.HandleFunc("/challenge", challengeHandler)
 	mux.HandleFunc("/keys", keysHandler) // POST to register, GET to fetch
 	mux.HandleFunc("/push-token", pushTokenHandler)
+	mux.HandleFunc("/groups", groupsHandler)
 	mux.HandleFunc("/cdn/upload", uploadHandler)
 	mux.HandleFunc("/cdn/file/", downloadHandler)
 	mux.HandleFunc("/ws", wsHandler)
@@ -477,6 +505,73 @@ func keysHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func groupsHandler(w http.ResponseWriter, r *http.Request) {
+	id := r.URL.Query().Get("id")
+	token := r.URL.Query().Get("token")
+	if id == "" || !isValidToken(id, token) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		var g Group
+		if err := json.NewDecoder(r.Body).Decode(&g); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		if !strings.HasPrefix(g.ID, "#") {
+			http.Error(w, "group id must start with #", http.StatusBadRequest)
+			return
+		}
+		groupsMux.Lock()
+		if _, exists := groups[g.ID]; exists {
+			existing := groups[g.ID]
+			if existing.Admin != id {
+				groupsMux.Unlock()
+				http.Error(w, "only admin can update group", http.StatusForbidden)
+				return
+			}
+			existing.Members = g.Members
+			if g.Name != "" {
+				existing.Name = g.Name
+			}
+			groups[g.ID] = existing
+		} else {
+			g.Admin = id
+			found := false
+			for _, m := range g.Members {
+				if m == id {
+					found = true
+					break
+				}
+			}
+			if !found {
+				g.Members = append(g.Members, id)
+			}
+			groups[g.ID] = g
+		}
+		groupsMux.Unlock()
+		saveGroups()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+	case http.MethodGet:
+		myGroups := make([]Group, 0)
+		groupsMux.RLock()
+		for _, g := range groups {
+			for _, m := range g.Members {
+				if m == id {
+					myGroups = append(myGroups, g)
+					break
+				}
+			}
+		}
+		groupsMux.RUnlock()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(myGroups)
+	}
+}
+
 func wsHandler(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	token := r.URL.Query().Get("token")
@@ -503,8 +598,6 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		history := getHistory(id)
 		for _, sm := range history {
-			// For history, we need to tell the client who the "other" person is
-			// so it can put the message in the right chat window.
 			other := sm.From
 			if sm.From == id {
 				other = sm.To
@@ -513,6 +606,29 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			sm.Msg["chatWith"] = other
 			sm.Msg["isHistory"] = true
 			c.send(sm.Msg)
+		}
+
+		// Also send history for all groups I'm in
+		groupsMux.RLock()
+		memberGroups := make([]string, 0)
+		for gid, g := range groups {
+			for _, m := range g.Members {
+				if m == id {
+					memberGroups = append(memberGroups, gid)
+					break
+				}
+			}
+		}
+		groupsMux.RUnlock()
+
+		for _, gid := range memberGroups {
+			gh := getHistory(gid)
+			for _, sm := range gh {
+				sm.Msg["from"] = sm.From
+				sm.Msg["chatWith"] = gid
+				sm.Msg["isHistory"] = true
+				c.send(sm.Msg)
+			}
 		}
 	}()
 
@@ -548,6 +664,35 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			Msg:  msg,
 			Ts:   jsonTime(msg["ts"]),
 		}
+
+		if strings.HasPrefix(to, "#") {
+			groupsMux.RLock()
+			g, ok := groups[to]
+			groupsMux.RUnlock()
+			if ok {
+				saveToHistory(to, sm)
+				clientsMux.RLock()
+				for _, m := range g.Members {
+					if m == id {
+						continue
+					}
+					if tc, ok := clients[m]; ok {
+						msgCopy := make(map[string]interface{})
+						for k, v := range msg {
+							msgCopy[k] = v
+						}
+						msgCopy["from"] = id
+						msgCopy["chatWith"] = to
+						tc.send(msgCopy)
+					} else {
+						sendPush(m, id)
+					}
+				}
+				clientsMux.RUnlock()
+			}
+			continue
+		}
+
 		saveToHistory(id, sm)
 		saveToHistory(to, sm)
 

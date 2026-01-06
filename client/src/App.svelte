@@ -22,6 +22,7 @@
   let contact: string | null = null
   let keypair: {publicKey:string, secretKey:string} | null = null
   let keys: Record<string,string> = {}
+  let groups: Array<{id:string, name:string, members:string[], admin:string}> = []
   let pendingKeys = new Set<string>()
   let ws: { send: (d: string) => void, close: () => void, readyState: number } | null = null
   let wsStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
@@ -268,40 +269,55 @@
           return null
         }
 
-        let otherPk = keys[chatWith]
-        if (!otherPk) {
-          otherPk = await fetchKey(chatWith)
+        let decryptPkName = chatWith
+        if (chatWith.startsWith('#')) {
+          decryptPkName = from
         }
 
-        if (!otherPk) {
-          console.warn(`No key found for ${chatWith}, skipping message`)
+        let decryptPk = keys[decryptPkName]
+        if (!decryptPk) {
+          decryptPk = await fetchKey(decryptPkName)
+        }
+
+        if (!decryptPk) {
+          console.warn(`No key found for ${decryptPkName}, skipping message`)
           return
         }
         
         let text = ''
         const attemptDecrypt = async (pk: string) => {
-          if (isPGP(pgpPrivateKey) && msg.cipher && msg.cipher.includes('-----BEGIN PGP MESSAGE-----')) {
+          let cipher = msg.cipher
+          let nonce = msg.nonce
+
+          if (msg.groupCiphers && msg.groupCiphers[id]) {
+            cipher = msg.groupCiphers[id].cipher
+            nonce = msg.groupCiphers[id].nonce
+          }
+
+          if (!cipher) return null
+
+          if (isPGP(pgpPrivateKey) && cipher.includes('-----BEGIN PGP MESSAGE-----')) {
             try {
-              return await decryptPGP(pgpPrivateKey, msg.cipher, pgpPassphrase) as string
+              return await decryptPGP(pgpPrivateKey, cipher, pgpPassphrase) as string
             } catch (e) {
               console.error('PGP decryption failed:', e)
               return null
             }
           } else if (keypair && pk && !pk.includes('-----BEGIN PGP')) {
-            return decrypt(keypair.secretKey, pk, msg.cipher, msg.nonce)
+            return decrypt(keypair.secretKey, pk, cipher, nonce)
           }
           return null
         }
 
-        text = await attemptDecrypt(otherPk) || ''
+        text = await attemptDecrypt(decryptPk) || ''
 
         // If decryption failed, try fetching the key again (it might have changed)
-        if (!text && msg.cipher && !msg.cipher.includes('typing')) {
+        if (!text && (msg.cipher || msg.groupCiphers) && !msg.cipher?.includes('typing')) {
           // Force a re-fetch if decryption failed
           keys = { ...keys }
-          delete keys[chatWith] 
-          const newPk = await fetchKey(chatWith)
-          if (newPk && newPk !== otherPk) {
+          delete keys[decryptPkName] 
+          const newPk = await fetchKey(decryptPkName)
+          if (newPk && newPk !== decryptPk) {
             text = await attemptDecrypt(newPk) || ''
           }
         }
@@ -379,30 +395,52 @@
 
   async function sendTo(to:string, text:string) {
     if(!ws || ws.readyState !== WebSocket.OPEN) return
-    await fetchContactKey(to)
-    const pk = keys[to]
-    if(!pk) return
     
     let payload: any = { to }
-    if (isPGP(pk)) {
-      // Encrypt for both recipient and self so history is readable
-      let encryptionKeys = [pk]
-      if (isPGP(pgpPrivateKey)) {
-        try {
-          const myPk = await getPublicKeyFromPrivate(pgpPrivateKey)
-          if (myPk && myPk !== pk) encryptionKeys.push(myPk)
-        } catch (e) {}
+    
+    if (to.startsWith('#')) {
+      const g = groups.find(x => x.id === to)
+      if (!g) return
+      
+      const groupCiphers: any = {}
+      for (const member of g.members) {
+        await fetchContactKey(member)
+        const mpk = keys[member]
+        if (!mpk) continue
+        
+        if (isPGP(mpk)) {
+          groupCiphers[member] = { cipher: await encryptPGP(mpk, text) }
+        } else if (keypair) {
+          const { cipher, nonce } = encrypt(keypair.secretKey, mpk, text)
+          groupCiphers[member] = { cipher, nonce }
+        }
       }
-      const cipher = await encryptPGP(encryptionKeys, text)
-      payload.cipher = cipher
-      payload.nonce = ''
-    } else if (keypair) {
-      const { cipher, nonce } = encrypt(keypair.secretKey, pk, text)
-      payload.cipher = cipher
-      payload.nonce = nonce
+      payload.groupCiphers = groupCiphers
     } else {
-      alert('No encryption key available for this contact')
-      return
+      await fetchContactKey(to)
+      const pk = keys[to]
+      if(!pk) return
+      
+      if (isPGP(pk)) {
+        // Encrypt for both recipient and self so history is readable
+        let encryptionKeys = [pk]
+        if (isPGP(pgpPrivateKey)) {
+          try {
+            const myPk = await getPublicKeyFromPrivate(pgpPrivateKey)
+            if (myPk && myPk !== pk) encryptionKeys.push(myPk)
+          } catch (e) {}
+        }
+        const cipher = await encryptPGP(encryptionKeys, text)
+        payload.cipher = cipher
+        payload.nonce = ''
+      } else if (keypair) {
+        const { cipher, nonce } = encrypt(keypair.secretKey, pk, text)
+        payload.cipher = cipher
+        payload.nonce = nonce
+      } else {
+        alert('No encryption key available for this contact')
+        return
+      }
     }
     
     ws.send(JSON.stringify(payload))
@@ -650,9 +688,37 @@
     }
   }
 
+  async function fetchGroups() {
+    if (!id || !sessionToken) return
+    try {
+      const res = await fetch(`${API_URL}/groups?id=${encodeURIComponent(id)}&token=${encodeURIComponent(sessionToken)}`)
+      if (res.ok) {
+        groups = await res.json()
+      }
+    } catch (e) {}
+  }
+
+  async function createGroup(name: string, members: string[]) {
+    if (!id || !sessionToken) return
+    const gid = '#' + Math.random().toString(36).slice(2, 10)
+    try {
+      const res = await fetch(`${API_URL}/groups?id=${encodeURIComponent(id)}&token=${encodeURIComponent(sessionToken)}`, {
+        method: 'POST',
+        body: JSON.stringify({ id: gid, name, members: [...members, id] })
+      })
+      if (res.ok) {
+        await fetchGroups()
+        contact = gid
+      }
+    } catch (e: any) {
+      alert('Failed to create group: ' + e.message)
+    }
+  }
+
   onMount(()=>{
     try {
       checkForUpdates()
+      fetchGroups()
       if ('Notification' in window) {
         notificationPermission = Notification.permission;
       }
@@ -902,6 +968,7 @@
       <div class="sidebar-wrapper" class:hidden-mobile={!showSidebar}>
         <Sidebar 
           {contacts} 
+          {groups}
           {version} 
           {updateAvailable} 
           {updateUrl} 
@@ -909,6 +976,7 @@
           selected={contact} 
           on:select={(e)=>{ contact = e.detail.id; showSidebar = false; }} 
           on:addContact={(e) => addContact(e.detail.id)} 
+          on:createGroup={(e) => createGroup(e.detail.name, e.detail.members)}
           on:openSettings={() => showSettings = true} 
           on:update={installUpdate}
         />
