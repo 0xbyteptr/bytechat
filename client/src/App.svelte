@@ -1,7 +1,8 @@
 <script lang="ts">
   import { generateKeyPair, encrypt, decrypt } from './lib/crypto'
+  import { cryptoPool } from './lib/cryptoPool'
   import { connectWS } from './lib/ws'
-  import { onMount } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import Sidebar from './components/Sidebar.svelte'
   import ChatWindow from './components/ChatWindow.svelte'
   import Auth from './components/Auth.svelte'
@@ -27,7 +28,7 @@
   let pendingKeys = new Set<string>()
   let failedKeys = new Set<string>()
   let ws: { send: (d: string) => void, close: () => void, readyState: number } | null = null
-  let wsStatus: 'disconnected' | 'connecting' | 'connected' = 'disconnected'
+  let wsStatus: 'disconnected' | 'connecting' | 'connected' | 'authenticating' = 'disconnected'
   interface Message {
     from: string;
     text: string;
@@ -289,11 +290,14 @@
 
           if (!cipher) return null
 
-          // Defer to prevent UI freeze during decryption
-          await new Promise(resolve => setTimeout(resolve, 5))
-
+          // Use worker pool to prevent UI blocking
           if (keypair && pk) {
-            return decrypt(keypair.secretKey, pk, cipher, nonce)
+            try {
+              return await cryptoPool.decrypt(keypair.secretKey, pk, cipher, nonce)
+            } catch (e) {
+              console.warn('Worker decryption failed, trying fallback', e)
+              return decrypt(keypair.secretKey, pk, cipher, nonce)
+            }
           }
           return null
         }
@@ -339,13 +343,26 @@
         )
         if (isDuplicate) return
 
-        messagesMap = {
-          ...messagesMap,
-          [chatWith]: [...(messagesMap[chatWith]||[]), msgObj].sort((a, b) => (a.ts || 0) - (b.ts || 0))
+        // Use requestIdleCallback for non-urgent UI updates
+        const updateMessages = () => {
+          messagesMap = {
+            ...messagesMap,
+            [chatWith]: [...(messagesMap[chatWith]||[]), msgObj].sort((a, b) => (a.ts || 0) - (b.ts || 0))
+          }
         }
         
-        // Don't notify for history messages
-        if (msg.isHistory) return
+        // For history messages, defer to idle time
+        if (msg.isHistory) {
+          if ('requestIdleCallback' in window) {
+            requestIdleCallback(() => updateMessages(), { timeout: 1000 })
+          } else {
+            setTimeout(updateMessages, 0)
+          }
+          return
+        }
+        
+        // For live messages, update immediately
+        updateMessages()
 
         if (chatWith !== contact) {
           unreadMap = { ...unreadMap, [chatWith]: (unreadMap[chatWith] || 0) + 1 }
@@ -400,32 +417,46 @@
         if (!g) return
         
         const groupCiphers: any = {}
+        const recipients: Record<string, string> = {}
+        
         for (const member of g.members) {
           await fetchContactKey(member)
           const mpk = keys[member]
-          if (!mpk) continue
-          
-          // Defer between encryptions
-          await new Promise(resolve => setTimeout(resolve, 5))
-          
-          if (keypair) {
-            const { cipher, nonce } = encrypt(keypair.secretKey, mpk, text)
-            groupCiphers[member] = { cipher, nonce }
+          if (mpk) recipients[member] = mpk
+        }
+        
+        if (keypair && Object.keys(recipients).length > 0) {
+          try {
+            const encrypted = await cryptoPool.batchEncrypt(keypair.secretKey, recipients, text)
+            Object.assign(groupCiphers, encrypted)
+          } catch (e) {
+            console.warn('Batch encryption failed, using fallback', e)
+            for (const member of g.members) {
+              const mpk = keys[member]
+              if (!mpk) continue
+              const { cipher, nonce } = encrypt(keypair.secretKey, mpk, text)
+              groupCiphers[member] = { cipher, nonce }
+            }
           }
         }
+        
         payload.groupCiphers = groupCiphers
       } else {
         await fetchContactKey(to)
         const pk = keys[to]
         if(!pk) return
         
-        // Defer before encryption
-        await new Promise(resolve => setTimeout(resolve, 5))
-        
         if (keypair) {
-          const { cipher, nonce } = encrypt(keypair.secretKey, pk, text)
-          payload.cipher = cipher
-          payload.nonce = nonce
+          try {
+            const { cipher, nonce } = await cryptoPool.encrypt(keypair.secretKey, pk, text)
+            payload.cipher = cipher
+            payload.nonce = nonce
+          } catch (e) {
+            console.warn('Worker encryption failed, using fallback', e)
+            const { cipher, nonce } = encrypt(keypair.secretKey, pk, text)
+            payload.cipher = cipher
+            payload.nonce = nonce
+          }
         } else {
           alert('No encryption key available for this contact')
           return
@@ -460,12 +491,24 @@
           const mime = parts[0].match(/:(.*?);/)?.[1] || '';
           const b64 = parts[1];
           
-          // Use a more memory-efficient way to decode base64 if possible
-          // or at least wrap it.
-          const binary = atob(b64);
-          const array = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
-          blob = new Blob([array], { type: mime });
+          // More memory-efficient base64 decoding for large files
+          const chunkSize = 1024 * 1024; // 1MB chunks
+          const chunks: Uint8Array[] = []
+          
+          for (let i = 0; i < b64.length; i += chunkSize) {
+            const chunk = b64.slice(i, i + chunkSize)
+            const binary = atob(chunk)
+            const array = new Uint8Array(binary.length)
+            for (let j = 0; j < binary.length; j++) array[j] = binary.charCodeAt(j)
+            chunks.push(array)
+            
+            // Yield to main thread periodically
+            if (i % (chunkSize * 5) === 0) {
+              await new Promise(resolve => setTimeout(resolve, 0))
+            }
+          }
+          
+          blob = new Blob(chunks as BlobPart[], { type: mime });
         } else {
           const res = await fetch(fileData);
           blob = await res.blob();
@@ -505,14 +548,18 @@
         fileUrl
       })
 
-      // Defer before encryption
-      await new Promise(resolve => setTimeout(resolve, 5))
-
       let payload: any = { to }
       if (keypair) {
-        const { cipher, nonce } = encrypt(keypair.secretKey, pk, payloadToEncrypt)
-        payload.cipher = cipher
-        payload.nonce = nonce
+        try {
+          const { cipher, nonce } = await cryptoPool.encrypt(keypair.secretKey, pk, payloadToEncrypt)
+          payload.cipher = cipher
+          payload.nonce = nonce
+        } catch (e) {
+          console.warn('Worker encryption failed, using fallback', e)
+          const { cipher, nonce } = encrypt(keypair.secretKey, pk, payloadToEncrypt)
+          payload.cipher = cipher
+          payload.nonce = nonce
+        }
       }
 
       ws.send(JSON.stringify(payload))
@@ -825,6 +872,16 @@
       console.error('Fatal onMount error:', err)
     }
   })
+  
+  onDestroy(() => {
+    // Clean up crypto worker pool to prevent memory leaks
+    if (cryptoPool) {
+      cryptoPool.terminate()
+    }
+    // Clean up any pending timeouts
+    if (contactsDebounce) clearTimeout(contactsDebounce)
+    if (typingTimeout) clearTimeout(typingTimeout)
+  })
 
   let saveTimeout: any = null
   $: if(isLoggedIn) {
@@ -852,13 +909,21 @@
   }
 
   // small mock contacts list for UI
-  $: contacts = Object.keys(messagesMap)
-    .filter(k => !k.startsWith('#')) // Exclude groups from contacts list
-    .map(k=>({ 
-      id:k, 
-      last: messagesMap[k]?.[messagesMap[k].length-1]?.text ?? '', 
-      unread: unreadMap[k] || 0 
-    }))
+  let contacts: Array<{ id: string; last: string; unread: number }> = []
+  let contactsDebounce: any = null
+  
+  $: if (messagesMap || unreadMap) {
+    if (contactsDebounce) clearTimeout(contactsDebounce)
+    contactsDebounce = setTimeout(() => {
+      contacts = Object.keys(messagesMap)
+        .filter(k => !k.startsWith('#')) // Exclude groups from contacts list
+        .map(k=>({ 
+          id:k, 
+          last: messagesMap[k]?.[messagesMap[k].length-1]?.text ?? '', 
+          unread: unreadMap[k] || 0 
+        }))
+    }, 50)
+  }
 
   $: totalUnread = Object.values(unreadMap).reduce((a, b) => a + b, 0)
   $: {

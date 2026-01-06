@@ -19,6 +19,33 @@
   let uploadProgress = 0
   let isUploading = false
   let uploadName = ''
+  let listEl: HTMLDivElement | null = null
+  let textareaEl: HTMLTextAreaElement
+  
+  // Virtual scrolling for performance
+  const ITEM_HEIGHT = 60 // Approximate height of message bubble
+  const BUFFER_SIZE = 5 // Extra items to render above/below viewport
+  let scrollTop = 0
+  let viewportHeight = 0
+  let visibleStart = 0
+  let visibleEnd = 0
+  let totalHeight = 0
+  
+  $: {
+    if (messages.length > 100) {
+      totalHeight = messages.length * ITEM_HEIGHT
+      viewportHeight = listEl?.clientHeight || 600
+      visibleStart = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - BUFFER_SIZE)
+      visibleEnd = Math.min(messages.length, Math.ceil((scrollTop + viewportHeight) / ITEM_HEIGHT) + BUFFER_SIZE)
+    } else {
+      visibleStart = 0
+      visibleEnd = messages.length
+      totalHeight = 0
+    }
+  }
+  
+  $: visibleMessages = messages.length > 100 ? messages.slice(visibleStart, visibleEnd) : messages
+  $: offsetY = visibleStart * ITEM_HEIGHT
 
   function send() { if(!contactId || !draft || isSending) return; dispatch('send', { to: contactId, text: draft }); draft = '' }
   
@@ -65,8 +92,12 @@
   $: if (draft) {
     dispatch('typing')
   }
-
-  let listEl: HTMLDivElement | null = null
+  
+  function handleScroll(e: Event) {
+    if (messages.length > 100) {
+      scrollTop = (e.target as HTMLElement).scrollTop
+    }
+  }
   
   function autoResize(e: Event) {
     const el = e.target as HTMLTextAreaElement
@@ -82,15 +113,6 @@
       el.style.height = 'auto'
     }
   }
-
-  function handleSendClick() {
-    send()
-    // We can use a selector or just rely on the fact that the textarea is bound to draft
-    // and we want to reset its height. Since we don't have a direct ref here easily
-    // without adding one, let's just add a ref for the textarea.
-  }
-
-  let textareaEl: HTMLTextAreaElement
 </script>
 
 <div class="chat-window">
@@ -115,11 +137,13 @@
       </div>
     </header>
 
-    <div class="message-list" bind:this={listEl}>
-      <div class="message-list-inner">
-        {#each messages as m}
-          <MessageBubble isOwn={m.from === currentUserId} msg={m} />
-        {/each}
+    <div class="message-list" bind:this={listEl} on:scroll={handleScroll}>
+      <div class="message-list-inner" style="height: {totalHeight ? totalHeight + 'px' : 'auto'}">
+        <div style="transform: translateY({offsetY}px); will-change: transform;">
+          {#each visibleMessages as m, i (visibleStart + i)}
+            <MessageBubble isOwn={m.from === currentUserId} msg={m} />
+          {/each}
+        </div>
       </div>
     </div>
 
