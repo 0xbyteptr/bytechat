@@ -66,11 +66,34 @@
   }
 
   let listEl: HTMLDivElement | null = null
-  
+  let autoscroll = true
+
+  function handleScroll() {
+    if (!listEl) return
+    const threshold = 150
+    autoscroll = (listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight) < threshold
+  }
+
+  afterUpdate(() => {
+    if (autoscroll && listEl) {
+      listEl.scrollTo({ top: listEl.scrollHeight, behavior: 'smooth' })
+    }
+  })
+
+  $: if (contactId && listEl) {
+    autoscroll = true
+    tick().then(() => {
+      if(listEl) listEl.scrollTop = listEl.scrollHeight
+    })
+  }
+
   function autoResize(e: Event) {
     const el = e.target as HTMLTextAreaElement
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, 150) + 'px'
+    if (autoscroll) {
+      tick().then(() => { if(listEl) listEl.scrollTop = listEl.scrollHeight })
+    }
   }
 
   function handleKeydown(e: KeyboardEvent) {
