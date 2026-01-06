@@ -877,11 +877,13 @@
   }
 
   // small mock contacts list for UI
-  $: contacts = Object.keys(messagesMap).map(k=>({ 
-    id:k, 
-    last: messagesMap[k]?.[messagesMap[k].length-1]?.text ?? '', 
-    unread: unreadMap[k] || 0 
-  }))
+  $: contacts = Object.keys(messagesMap)
+    .filter(k => !k.startsWith('#')) // Exclude groups from contacts list
+    .map(k=>({ 
+      id:k, 
+      last: messagesMap[k]?.[messagesMap[k].length-1]?.text ?? '', 
+      unread: unreadMap[k] || 0 
+    }))
 
   $: totalUnread = Object.values(unreadMap).reduce((a, b) => a + b, 0)
   $: {
