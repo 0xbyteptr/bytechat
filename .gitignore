@@ -16,3 +16,5 @@ dist/
 data/
 client/android/
 client/.env.production
+
+firebase-auth.json

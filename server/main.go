@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -20,11 +21,14 @@ import (
 	"sync"
 	"time"
 
+	firebase "firebase.google.com/go/v4"
+	"firebase.google.com/go/v4/messaging"
 	"github.com/ProtonMail/go-crypto/openpgp"
 	"github.com/ProtonMail/go-crypto/openpgp/armor"
 	"github.com/gorilla/websocket"
 	"github.com/joho/godotenv"
 	"golang.org/x/crypto/nacl/box"
+	"google.golang.org/api/option"
 )
 
 const dataDir = "data"
@@ -74,6 +78,9 @@ var (
 	// Server Nacl keypair for challenges
 	serverPub  [32]byte
 	serverPriv [32]byte
+
+	fcmClient *messaging.Client
+	fcmApp    *firebase.App
 )
 
 func init() {
@@ -117,6 +124,21 @@ func init() {
 	loadPushTokens()
 	loadGroups()
 	loadSessions()
+
+	// Initialize Firebase App
+	opt := option.WithCredentialsFile("firebase-auth.json")
+	app, err := firebase.NewApp(context.Background(), nil, opt)
+	if err != nil {
+		log.Printf("error initializing firebase app: %v\n", err)
+	} else {
+		fcmApp = app
+		client, err := fcmApp.Messaging(context.Background())
+		if err != nil {
+			log.Printf("error getting messaging client: %v\n", err)
+		} else {
+			fcmClient = client
+		}
+	}
 }
 
 func loadSessions() {
@@ -322,14 +344,12 @@ func loggingMiddleware(next http.Handler) http.Handler {
 		isWS := strings.Contains(strings.ToLower(r.Header.Get("Upgrade")), "websocket")
 		if isWS {
 			log.Printf("WS_HANDSHAKE %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+			next.ServeHTTP(w, r)
+			return
 		}
 
 		srw := &statusResponseWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(srw, r)
-
-		if isWS {
-			return // Don't log again for WS as it stays open
-		}
 
 		uri := r.RequestURI
 		if strings.Contains(uri, "token=") {
@@ -811,46 +831,32 @@ func sendPush(to, from, chatId string) {
 		return
 	}
 
-	serverKey := strings.TrimSpace(os.Getenv("FCM_SERVER_KEY"))
-	if serverKey == "" {
-		log.Println("FCM_SERVER_KEY not set, skipping push")
+	if fcmClient == nil {
+		log.Println("FCM client not initialized, skipping push")
 		return
 	}
 
-	// Debug: Check lengths
-	log.Printf("DEBUG PUSH: to=%s, tokenLen=%d, keyLen=%d\n", to, len(token), len(serverKey))
-
-	payload := map[string]interface{}{
-		"to": token,
-		"notification": map[string]string{
-			"title": "New message",
-			"body":  fmt.Sprintf("You have a new message from %s", from),
-			"sound": "default",
+	message := &messaging.Message{
+		Notification: &messaging.Notification{
+			Title: "New message",
+			Body:  fmt.Sprintf("You have a new message from %s", from),
 		},
-		"data": map[string]string{
+		Data: map[string]string{
 			"from":   from,
 			"chatId": chatId,
 		},
+		Token: token,
 	}
 
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", "https://fcm.googleapis.com/fcm/send", bytes.NewBuffer(body))
-	req.Header.Set("Authorization", "key="+serverKey)
-	req.Header.Set("Content-Type", "application/json")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	response, err := fcmClient.Send(ctx, message)
 	if err != nil {
-		log.Printf("Error sending push: %v\n", err)
+		log.Printf("Error sending push to %s: %v\n", to, err)
 		return
 	}
-	defer resp.Body.Close()
-
-	respBody, _ := io.ReadAll(resp.Body)
-	log.Printf("Push sent to %s, status: %s, response_len: %d\n", to, resp.Status, len(respBody))
-	if resp.StatusCode != 200 {
-		log.Printf("FCM ERROR DETAIL: %s\n", string(respBody))
-	}
+	log.Printf("Successfully sent push message to %s: %s\n", to, response)
 }
 
 func jsonTime(v interface{}) int64 {
