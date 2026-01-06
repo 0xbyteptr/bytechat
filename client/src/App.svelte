@@ -10,7 +10,7 @@
   import { LocalNotifications } from '@capacitor/local-notifications'
   import { PushNotifications } from '@capacitor/push-notifications'
   import { Capacitor } from '@capacitor/core'
-  import { Filesystem, Directory } from '@capacitor/filesystem'
+  import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
   import { FileOpener } from '@capacitor-community/file-opener'
 
   const API_URL = import.meta.env.VITE_API_URL || (Capacitor.isNativePlatform() ? 'https://api.byteptr.xyz' : '')
@@ -382,7 +382,20 @@
     // Upload to CDN
     let fileUrl = ''
     try {
-      const blob = await (await fetch(fileData)).blob()
+      let blob: Blob;
+      if (fileData.startsWith('data:')) {
+        const parts = fileData.split(',');
+        const mime = parts[0].match(/:(.*?);/)?.[1] || '';
+        const b64 = parts[1];
+        const binary = atob(b64);
+        const array = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
+        blob = new Blob([array], { type: mime });
+      } else {
+        const res = await fetch(fileData);
+        blob = await res.blob();
+      }
+
       const formData = new FormData()
       formData.append('file', blob, fileName)
       
@@ -472,7 +485,7 @@
     }
   }
 
-  function exportKeys() {
+  async function exportKeys() {
     let content = ''
     let filename = `bytechat_${id}_keys.txt`
     
@@ -485,13 +498,31 @@
       return
     }
 
-    const blob = new Blob([content], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = filename
-    a.click()
-    URL.revokeObjectURL(url)
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const result = await Filesystem.writeFile({
+          path: filename,
+          data: content,
+          directory: Directory.Documents,
+          encoding: Encoding.UTF8,
+          recursive: true
+        })
+        await FileOpener.open({
+          filePath: result.uri,
+          contentType: 'text/plain'
+        })
+      } catch (e: any) {
+        alert('Failed to save keys: ' + e.message)
+      }
+    } else {
+      const blob = new Blob([content], { type: 'text/plain' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+    }
   }
 
   function logout() {

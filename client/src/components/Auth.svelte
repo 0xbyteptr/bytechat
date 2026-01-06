@@ -3,6 +3,8 @@
   import { generateKeyPair, decrypt } from '../lib/crypto'
   import { getPublicKeyFromPrivate, decryptPGP } from '../lib/pgp'
   import { Capacitor } from '@capacitor/core'
+  import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
+  import { FileOpener } from '@capacitor-community/file-opener'
 
   const dispatch = createEventDispatcher()
   const API_URL = import.meta.env.VITE_API_URL || (Capacitor.isNativePlatform() ? 'https://api.byteptr.xyz' : '')
@@ -136,16 +138,38 @@
 
   function newKeypair() { keypair = generateKeyPair() }
 
-  function exportNaclKeys() {
+  async function exportNaclKeys() {
     if (!id || !keypair) return
     const content = `ByteChat Nacl Keys for ${id}\n\nPublic Key: ${keypair.publicKey}\nSecret Key: ${keypair.secretKey}`
-    const blob = new Blob([content], { type: 'text/plain' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `bytechat_${id}_nacl_keys.txt`
-    a.click()
-    URL.revokeObjectURL(url)
+    
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const fileName = `bytechat_${id}_nacl_keys.txt`
+        
+        const result = await Filesystem.writeFile({
+          path: fileName,
+          data: content,
+          directory: Directory.Documents,
+          encoding: Encoding.UTF8,
+          recursive: true
+        })
+
+        await FileOpener.open({
+          filePath: result.uri,
+          contentType: 'text/plain'
+        })
+      } catch (e: any) {
+        alert('Failed to save keys: ' + e.message)
+      }
+    } else {
+      const blob = new Blob([content], { type: 'text/plain' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `bytechat_${id}_nacl_keys.txt`
+      a.click()
+      URL.revokeObjectURL(url)
+    }
   }
 </script>
 

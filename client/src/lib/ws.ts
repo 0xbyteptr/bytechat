@@ -4,7 +4,6 @@ export function connectWS(id: string, token: string, onMessage: (m: any)=>void, 
   let baseUrl = import.meta.env.VITE_WS_URL
   if (!baseUrl) {
     if (Capacitor.isNativePlatform()) {
-      // Default to emulator IP if native, otherwise user must provide VITE_WS_URL
       baseUrl = 'wss://api.byteptr.xyz'
     } else {
       baseUrl = (window.location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + window.location.host
