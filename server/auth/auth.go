@@ -210,6 +210,16 @@ func KeysHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Ensure user profile exists (create empty one if not present)
+		if _, exists := storage.GetProfile(body.ID); !exists {
+			profile := models.Profile{
+				ID: body.ID,
+			}
+			if err := storage.SaveProfile(profile); err != nil {
+				log.Printf("Warning: failed to create default profile for %s: %v\n", body.ID, err)
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
 			"status": "success",

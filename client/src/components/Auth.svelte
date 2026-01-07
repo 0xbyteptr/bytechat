@@ -13,6 +13,7 @@
   export let id = ''
   export let keypair: {publicKey:string, secretKey:string} | null = null
   let naclSecretKey = ''
+  let rememberMe = false
 
   let mode: 'login-nacl' | 'register' = 'login-nacl'
   let loading = false
@@ -20,8 +21,42 @@
   let latestVersion = ''
   let isNewerThanRelease = false
 
+  function loadSavedCredentials() {
+    try {
+      const saved = localStorage.getItem('bytechat_remember')
+      if (saved) {
+        const { id: savedId, naclSecretKey: savedKey } = JSON.parse(saved)
+        id = savedId || ''
+        naclSecretKey = savedKey || ''
+        rememberMe = true
+      }
+    } catch (e) {
+      console.error('Failed to load saved credentials:', e)
+    }
+  }
+
+  function saveCredentials() {
+    if (rememberMe) {
+      try {
+        localStorage.setItem('bytechat_remember', JSON.stringify({
+          id: id.trim(),
+          naclSecretKey: naclSecretKey.trim()
+        }))
+      } catch (e) {
+        console.error('Failed to save credentials:', e)
+      }
+    } else {
+      try {
+        localStorage.removeItem('bytechat_remember')
+      } catch (e) {
+        console.error('Failed to clear saved credentials:', e)
+      }
+    }
+  }
+
   onMount(() => {
     checkForUpdates()
+    loadSavedCredentials()
   })
 
   function compareVersions(v1: string, v2: string): number {
@@ -64,6 +99,7 @@
       alert('ID and Nacl Secret Key are required')
       return
     }
+    saveCredentials()
     loading = true
     
     // Defer operations to prevent UI freeze
@@ -200,6 +236,10 @@
           <label for="nacl-sk">Nacl Secret Key (Base64)</label>
           <input id="nacl-sk" placeholder="Your Nacl secret key" bind:value={naclSecretKey} />
         </div>
+        <label class="remember-me-label">
+          <input type="checkbox" bind:checked={rememberMe} on:change={saveCredentials} />
+          <span>Remember me</span>
+        </label>
         <button class="btn-purple" on:click={loginWithNacl} disabled={loading || !id || !naclSecretKey}>
           {loading ? 'Verifying...' : 'Login'}
         </button>
@@ -372,6 +412,32 @@
     outline: none;
     border-color: var(--accent);
     box-shadow: 0 0 0 3px rgba(203, 166, 247, 0.1);
+  }
+
+  .remember-me-label {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    font-size: 0.9rem;
+    color: var(--fg);
+    cursor: pointer;
+    user-select: none;
+    margin: -0.5rem 0 0.5rem 0;
+  }
+
+  .remember-me-label input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    cursor: pointer;
+    accent-color: var(--accent);
+  }
+
+  .remember-me-label span {
+    font-weight: 500;
+  }
+
+  .remember-me-label:hover span {
+    opacity: 0.8;
   }
 
   .nacl-box {
