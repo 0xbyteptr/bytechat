@@ -31,7 +31,7 @@ var (
 	maxFileSize int64 = 50 * 1024 * 1024
 )
 
-// gzipWriter wraps http.ResponseWriter with gzip compression
+// gzipWriter wraps http.ResponseWriter with gzip compression and preserves Hijacker
 type gzipResponseWriter struct {
 	io.Writer
 	http.ResponseWriter
@@ -41,9 +41,15 @@ func (w gzipResponseWriter) Write(b []byte) (int, error) {
 	return w.Writer.Write(b)
 }
 
-// Gzip middleware for response compression
+// Gzip middleware for response compression (skip for WebSocket and other upgrade requests)
 func gzipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Don't gzip WebSocket upgrades or any upgrade requests
+		if r.Header.Get("Upgrade") != "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			next.ServeHTTP(w, r)
 			return
