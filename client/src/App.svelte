@@ -1642,13 +1642,26 @@
   $: if (messagesMap || unreadMap) {
     if (contactsDebounce) clearTimeout(contactsDebounce)
     contactsDebounce = setTimeout(() => {
-      contacts = Object.keys(messagesMap)
+      const dm = Object.keys(messagesMap)
         .filter(k => !k.startsWith('#')) // Exclude groups from contacts list
-        .map(k=>({ 
-          id:k, 
-          last: messagesMap[k]?.[messagesMap[k].length-1]?.text ?? '', 
-          unread: unreadMap[k] || 0 
-        }))
+        .map(k => {
+          const msgs = messagesMap[k] || []
+          const lastMsg = msgs.length ? msgs[msgs.length - 1] : undefined
+          const lastTs = lastMsg?.ts ?? 0
+          return {
+            id: k,
+            last: lastMsg?.text ?? '',
+            unread: unreadMap[k] || 0,
+            _ts: lastTs
+          }
+        })
+        .sort((a, b) => {
+          if (b._ts !== a._ts) return b._ts - a._ts
+          // tie-breaker: higher unread first
+          return (b.unread || 0) - (a.unread || 0)
+        })
+        .map(({ _ts, ...rest }) => rest)
+      contacts = dm
     }, 50)
   }
 
