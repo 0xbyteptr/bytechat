@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte'
+  import { renderMarkdown } from '../lib/markdown'
   
   export let msg: { 
     from: string; 
@@ -12,11 +13,15 @@
     replyTo?: { messageId: string; text: string; from: string };
     read?: boolean;
     readAt?: number;
-    type?: 'text' | 'call';
+    type?: 'text' | 'call' | 'voice';
     callData?: {
       duration?: number;
       status: 'missed' | 'completed' | 'cancelled' | 'declined';
       initiator: string;
+    };
+    voiceData?: {
+      duration?: number;
+      audioUrl?: string;
     };
     reactions?: Record<string, string[]>;
     failedDecrypt?: boolean;
@@ -62,6 +67,11 @@
     dispatch('reply', msg)
     showActions = false
   }
+  
+  function handleForward() {
+    dispatch('forward', msg)
+    showActions = false
+  }
 
   function handleTogglePin() {
     if (!msg.messageId) return
@@ -74,8 +84,14 @@
     dispatch('react', { messageId: msg.messageId, emoji })
     showActions = false
   }
+  
+  function formatVoiceDuration(seconds: number): string {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins}:${secs.toString().padStart(2, '0')}`
+  }
 
-  const defaultReactions = ['👍','❤️','😂','😮','😢']
+  const defaultReactions = ['👍','❤️','😂','😮','😢','🔥']
 </script>
 
 <div class="message-row" class:is-own={isOwn}>
@@ -127,8 +143,15 @@
         <span class="call-icon">{getCallIcon(msg.callData?.status || 'completed')}</span>
         <span class="call-text">{msg.text}</span>
       </div>
+    {:else if msg.type === 'voice' && msg.voiceData}
+      <div class="voice-message">
+        <audio controls src={msg.voiceData.audioUrl}></audio>
+        {#if msg.voiceData.duration}
+          <span class="voice-duration">{formatVoiceDuration(msg.voiceData.duration)}</span>
+        {/if}
+      </div>
     {:else}
-      <div class="text">{msg.text}</div>
+      <div class="text">{@html renderMarkdown(msg.text)}</div>
     {/if}
     
     <div class="meta">
@@ -172,6 +195,12 @@
             <path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/>
           </svg>
           Reply
+        </button>
+        <button class="action-btn" on:click={handleForward}>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M14 9V5l7 7-7 7v-4.1c-5 0-8.5 1.6-11 5.1 1-5 4-10 11-11z"/>
+          </svg>
+          Forward
         </button>
         <div class="reaction-row">
           {#each defaultReactions as emoji}
@@ -470,6 +499,108 @@
 
   .text {
     white-space: pre-wrap;
+  }
+  
+  .voice-message {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 250px;
+  }
+  
+  .voice-message audio {
+    width: 100%;
+    height: 36px;
+    border-radius: 8px;
+  }
+  
+  .voice-duration {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    opacity: 0.7;
+    text-align: right;
+  }
+  
+  /* Markdown styles */
+  .text :global(strong) {
+    font-weight: 700;
+  }
+  
+  .text :global(em) {
+    font-style: italic;
+  }
+  
+  .text :global(del) {
+    text-decoration: line-through;
+    opacity: 0.7;
+  }
+  
+  .text :global(.inline-code) {
+    background: rgba(0, 0, 0, 0.2);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+  }
+  
+  .message-row.is-own .text :global(.inline-code) {
+    background: rgba(255, 255, 255, 0.2);
+  }
+  
+  .text :global(.code-block) {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 12px;
+    border-radius: 8px;
+    overflow-x: auto;
+    margin: 8px 0;
+  }
+  
+  .message-row.is-own .text :global(.code-block) {
+    background: rgba(255, 255, 255, 0.15);
+  }
+  
+  .text :global(.code-block code) {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    line-height: 1.5;
+  }
+  
+  .text :global(.spoiler) {
+    background: rgba(0, 0, 0, 0.8);
+    color: transparent;
+    padding: 2px 4px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  
+  .text :global(.spoiler:hover) {
+    background: rgba(0, 0, 0, 0.4);
+    color: inherit;
+  }
+  
+  .text :global(.mention) {
+    background: rgba(var(--accent-rgb), 0.2);
+    color: var(--accent);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  
+  .message-row.is-own .text :global(.mention) {
+    background: rgba(255, 255, 255, 0.3);
+    color: var(--accent-fg);
+  }
+  
+  .text :global(a) {
+    color: var(--blue);
+    text-decoration: underline;
+    font-weight: 500;
+  }
+  
+  .message-row.is-own .text :global(a) {
+    color: var(--accent-fg);
+    opacity: 0.9;
   }
 
   .meta {

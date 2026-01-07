@@ -316,6 +316,17 @@
     border-radius: 24px;
     padding: 2.5rem;
     box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+    animation: fadeIn 0.5s ease-out, scaleIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  
+  @keyframes scaleIn {
+    from { transform: scale(0.95); }
+    to { transform: scale(1); }
   }
 
   @media (max-width: 480px) {
@@ -337,7 +348,10 @@
   .brand {
     font-size: 2.5rem;
     font-weight: 800;
-    color: var(--accent);
+    background: linear-gradient(135deg, var(--accent), var(--lavender));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
     margin-bottom: 0.5rem;
     letter-spacing: -0.03em;
   }
@@ -400,18 +414,23 @@
   input {
     width: 100%;
     background: var(--bg);
-    border: 1px solid var(--surface-lighter);
+    border: 2px solid var(--surface-lighter);
     border-radius: 12px;
     padding: 0.85rem 1rem;
     color: var(--fg);
     font-size: 0.95rem;
-    transition: border-color 0.2s, box-shadow 0.2s;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   input:focus {
     outline: none;
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(203, 166, 247, 0.1);
+    box-shadow: 0 0 0 4px rgba(203, 166, 247, 0.15);
+    transform: translateY(-1px);
+  }
+  
+  input:hover:not(:focus) {
+    border-color: var(--overlay);
   }
 
   .remember-me-label {
@@ -482,7 +501,7 @@
     font-weight: 800;
     font-size: 1rem;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     border: none;
     display: flex;
     align-items: center;
@@ -490,13 +509,30 @@
     gap: 0.5rem;
   }
 
-  .btn-purple { background: #cba6f7; color: var(--bg); }
-  .btn-secondary { background: var(--surface-lighter); color: var(--fg); }
+  .btn-purple { 
+    background: linear-gradient(135deg, var(--accent) 0%, var(--lavender) 100%); 
+    color: var(--bg); 
+  }
+  
+  .btn-secondary { 
+    background: var(--surface-lighter); 
+    color: var(--fg); 
+    border: 2px solid transparent;
+  }
 
-  .btn-purple:hover { 
-    opacity: 0.9;
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(203, 166, 247, 0.2);
+  .btn-purple:hover:not(:disabled) { 
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(203, 166, 247, 0.4);
+  }
+  
+  .btn-secondary:hover {
+    background: var(--overlay);
+    border-color: var(--accent);
+  }
+  
+  .btn-purple:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .btn-purple:active { transform: translateY(0); }

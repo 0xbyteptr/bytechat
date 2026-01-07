@@ -1,5 +1,6 @@
 <script lang="ts">
   import MessageBubble from './MessageBubble.svelte'
+  import VoiceRecorder from './VoiceRecorder.svelte'
   import { createEventDispatcher, afterUpdate, tick } from 'svelte'
   export let currentUserId: string
   export let contactId: string | null = null
@@ -141,6 +142,25 @@
     replyingTo = e.detail
     editingMessage = null
     textareaEl?.focus()
+  }
+  
+  function handleForward(e: CustomEvent) {
+    dispatch('forward', e.detail)
+  }
+  
+  function handleVoiceMessage(e: CustomEvent) {
+    const { audioBlob, duration } = e.detail
+    if (!contactId || !audioBlob) return
+    
+    const reader = new FileReader()
+    reader.onload = () => {
+      dispatch('sendVoice', {
+        to: contactId,
+        audioBlob: reader.result,
+        duration: duration
+      })
+    }
+    reader.readAsDataURL(audioBlob)
   }
   
   function cancelEdit() {
@@ -408,6 +428,7 @@
                 on:edit={handleEdit}
                 on:delete={handleDelete}
                 on:reply={handleReply}
+                on:forward={handleForward}
                 on:react={handleReact}
                 on:togglePin={() => handleTogglePin(m.messageId)}
               />
@@ -476,6 +497,7 @@
           on:input={autoResize}
           on:keydown={handleKeydown}
         />
+        <VoiceRecorder on:send={handleVoiceMessage} />
         <button class="send-button" on:click={() => { send(); if(textareaEl) textareaEl.style.height = 'auto' }} disabled={!draft.trim() || isSending}>
           {#if isSending}
             <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" class="spinner">

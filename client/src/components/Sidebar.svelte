@@ -360,12 +360,17 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.2s;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .settings-btn:hover {
     color: var(--accent);
     background: var(--surface-lighter);
+    transform: translateY(-2px);
+  }
+  
+  .settings-btn:active {
+    transform: translateY(0);
   }
 
   .add-contact {
@@ -415,12 +420,16 @@
     justify-content: center;
     cursor: pointer;
     border: none;
-    transition: transform 0.2s, opacity 0.2s;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .add-btn:hover {
-    transform: scale(1.05);
-    opacity: 0.9;
+    transform: scale(1.1) rotate(90deg);
+    box-shadow: 0 4px 12px rgba(var(--accent-rgb), 0.4);
+  }
+  
+  .add-btn:active {
+    transform: scale(1.05) rotate(90deg);
   }
 
   .contact-list {
@@ -446,18 +455,42 @@
     background: transparent;
     color: var(--fg);
     cursor: pointer;
-    transition: background 0.2s;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     text-align: left;
     margin-bottom: 0.25rem;
+    position: relative;
+  }
+  
+  .contact-item::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 3px;
+    height: 0;
+    background: var(--accent);
+    border-radius: 0 3px 3px 0;
+    transition: height 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
   .contact-item:hover {
     background: var(--surface-lighter);
+    transform: translateX(4px);
+  }
+  
+  .contact-item:hover::before {
+    height: 50%;
   }
 
   .contact-item.active:not(.has-banner) {
     background: var(--accent);
     color: var(--accent-fg);
+    box-shadow: 0 4px 12px rgba(var(--accent-rgb), 0.3);
+  }
+  
+  .contact-item.active::before {
+    height: 70%;
   }
 
   /* Preserve banner image on hover and improve legibility */
@@ -496,13 +529,19 @@
     font-weight: 800;
     color: var(--accent);
     flex-shrink: 0;
-      overflow: hidden;
-    }
+    overflow: hidden;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  
+  .contact-item:hover .avatar {
+    transform: scale(1.05);
+    border-color: var(--accent);
+  }
 
-    .avatar img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
+  .avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
 
   .avatar-wrapper {

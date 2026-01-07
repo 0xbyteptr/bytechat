@@ -52,6 +52,12 @@
     align-items: center;
     justify-content: center;
     z-index: 9999;
+    animation: fadeIn 0.3s ease-out;
+  }
+  
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
   }
 
   .loading-content {
@@ -62,6 +68,18 @@
     padding: 2rem;
     max-width: 400px;
     width: 90%;
+    animation: slideUp 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  
+  @keyframes slideUp {
+    from { 
+      opacity: 0;
+      transform: translateY(30px);
+    }
+    to { 
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 
   .logo-container {
@@ -73,7 +91,7 @@
 
   .logo {
     position: relative;
-    animation: float 3s ease-in-out infinite;
+    animation: float 3s ease-in-out infinite, spin 8s linear infinite;
   }
 
   @keyframes float {
@@ -82,6 +100,15 @@
     }
     50% {
       transform: translateY(-10px);
+    }
+  }
+  
+  @keyframes spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
     }
   }
 
@@ -105,11 +132,20 @@
 
   .app-name {
     font-size: 2rem;
-    font-weight: 700;
-    color: var(--accent);
+    font-weight: 800;
+    background: linear-gradient(135deg, var(--accent), var(--lavender));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
     margin: 0;
-    letter-spacing: 1px;
+    letter-spacing: -0.02em;
     text-shadow: 0 2px 10px rgba(var(--accent-rgb, 137, 180, 250), 0.3);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.8; }
   }
 
   .status-container {

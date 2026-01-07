@@ -353,6 +353,22 @@
     applyProfileToSettingsForm()
   }
 
+  // Auto-load profiles for all contacts in sidebar
+  $: if (contacts && contacts.length > 0) {
+    contacts.forEach(contact => {
+      if (!contact.id.startsWith('#')) {
+        const now = Date.now()
+        const profile = profiles[contact.id]
+        const timestamp = profileTimestamps[contact.id]
+        
+        // Load if no profile or cache expired
+        if (profile === undefined || !timestamp || (now - timestamp >= PROFILE_CACHE_TTL)) {
+          loadProfile(contact.id)
+        }
+      }
+    })
+  }
+
   function handleAuthSuccess(e: any) {
     const data = e.detail
     if (!data) return
@@ -862,6 +878,46 @@
       messagesMap = {
         ...messagesMap,
         [to]: [...(messagesMap[to]||[]), { from: id, text: `Sent file: ${fileName}`, file: { fileName, fileType, fileData, fileUrl }, ts: Date.now() }].sort((a, b) => (a.ts || 0) - (b.ts || 0))
+      }
+    } finally {
+      isSending = false
+    }
+  }
+
+  async function sendVoice(to: string, audioDataUrl: string, duration: number) {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !keypair || !audioDataUrl) return
+    
+    try {
+      isSending = true
+      
+      await fetchContactKey(to)
+      const pk = keys[to]
+      if (!pk) return
+
+      const payloadToEncrypt = JSON.stringify({
+        bytechat_voice: true,
+        audioData: audioDataUrl,
+        duration
+      })
+
+      let payload: any = { type: 'voice', to }
+      if (keypair) {
+        try {
+          const { cipher, nonce } = await cryptoPool.encrypt(keypair.secretKey, pk, payloadToEncrypt)
+          payload.cipher = cipher
+          payload.nonce = nonce
+        } catch (e) {
+          console.warn('Worker encryption failed, using fallback', e)
+          const { cipher, nonce } = encrypt(keypair.secretKey, pk, payloadToEncrypt)
+          payload.cipher = cipher
+          payload.nonce = nonce
+        }
+      }
+
+      ws.send(JSON.stringify(payload))
+      messagesMap = {
+        ...messagesMap,
+        [to]: [...(messagesMap[to]||[]), { from: id, type: 'voice', voiceData: { duration, audioUrl: audioDataUrl }, ts: Date.now() }].sort((a, b) => (a.ts || 0) - (b.ts || 0))
       }
     } finally {
       isSending = false
@@ -2123,6 +2179,7 @@
           <Sidebar
             {contacts}
             {groups}
+            {profiles}
             {version}
             {updateAvailable}
             {isNewerThanRelease}
@@ -2171,6 +2228,7 @@
               pinned={pinnedMap[contact] || []}
               on:send={(e) => sendTo(e.detail.to, e.detail.text, e.detail.replyTo)}
               on:sendFile={(e) => sendFile(e.detail.to, e.detail.fileData, e.detail.fileName, e.detail.fileType)}
+              on:sendVoice={(e) => sendVoice(e.detail.to, e.detail.audioBlob, e.detail.duration)}
               on:edit={handleEdit}
               on:delete={handleDelete}
               on:react={handleReact}

@@ -449,6 +449,68 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		// Handle voice messages
+		if msgType, ok := msg["type"].(string); ok && msgType == "voice" {
+			to, _ := msg["to"].(string)
+			if to == "" {
+				continue
+			}
+
+			msg["from"] = id
+			if _, ok := msg["ts"]; !ok {
+				msg["ts"] = time.Now().UnixMilli()
+			}
+			delete(msg, "to")
+
+			sm := models.StoredMessage{
+				From: id,
+				To:   to,
+				Msg:  msg,
+				Ts:   jsonTime(msg["ts"]),
+			}
+
+			if strings.HasPrefix(to, "#") {
+				// Group voice message
+				g, err := storage.GetGroup(to)
+				if err == nil {
+					storage.SaveToHistory(to, sm)
+					clientsMux.RLock()
+					for _, m := range g.Members {
+						if m == id {
+							continue
+						}
+						if tc, ok := clients[m]; ok {
+							msgCopy := make(map[string]interface{})
+							for k, v := range msg {
+								msgCopy[k] = v
+							}
+							msgCopy["from"] = id
+							msgCopy["chatWith"] = to
+							tc.Send(msgCopy)
+						}
+					}
+					clientsMux.RUnlock()
+				}
+			} else {
+				// Direct voice message
+				storage.SaveToHistory(id, sm)
+				storage.SaveToHistory(to, sm)
+
+				clientsMux.RLock()
+				toClient, ok := clients[to]
+				clientsMux.RUnlock()
+				if ok {
+					if err := toClient.Send(msg); err != nil {
+						log.Println("relay voice error:", err)
+					}
+				} else {
+					log.Printf("recipient %s (from %s) offline; sending push notification\n", to, id)
+					push.SendPush(to, id, id)
+				}
+			}
+			continue
+		}
+
 		to, _ := msg["to"].(string)
 		if to == "" {
 			continue
