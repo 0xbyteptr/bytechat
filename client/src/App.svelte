@@ -8,6 +8,7 @@
   import Auth from './components/Auth.svelte'
   import LoadingScreen from './components/LoadingScreen.svelte'
   import PermissionsDialog from './components/PermissionsDialog.svelte'
+  import Developers from './components/Developers.svelte'
   import pkg from '../package.json'
   
   // Composables
@@ -31,11 +32,38 @@
   const API_URL = import.meta.env.VITE_API_URL || 'https://api.byteptr.xyz'
   const version = pkg.version
 
+  type Route =
+    | { kind: 'home' }
+    | { kind: 'developers' }
+    | { kind: 'chat'; chatId: string }
+
+  const getInitialPath = () => (typeof window !== 'undefined' ? window.location.pathname || '/' : '/')
+
+  function parseRoute(path: string): Route {
+    if (path.startsWith('/developers')) return { kind: 'developers' }
+    if (path.startsWith('/chat/')) {
+      const chatId = decodeURIComponent(path.slice('/chat/'.length))
+      return chatId ? { kind: 'chat', chatId } : { kind: 'home' }
+    }
+    return { kind: 'home' }
+  }
+
+  let route: Route = parseRoute(getInitialPath())
+
+  function navigateTo(path: string) {
+    if (typeof window === 'undefined') return
+    history.pushState({}, '', path)
+    route = parseRoute(path)
+  }
+
   // Session state
   let id = ''
   let sessionToken = ''
   let keypair: {publicKey:string, secretKey:string} | null = null
   let isLoggedIn = false
+  
+  // Routing state
+  let isDevelopersPage = route.kind === 'developers'
   
   // Contact and message state
   let contact: string | null = null
@@ -647,6 +675,11 @@
     }
   }
 
+  $: isDevelopersPage = route.kind === 'developers'
+  $: if (route.kind === 'chat' && route.chatId && contact !== route.chatId) {
+    contact = route.chatId
+  }
+
   function sendReadReceipt(from: string, messageId: string) {
     if (!ws || ws.readyState !== WebSocket.OPEN || !messageId) return
     
@@ -1127,6 +1160,11 @@
     unreadMap = {}
     contact = null
     showSidebar = true
+    route = { kind: 'home' }
+    isDevelopersPage = false
+    if (typeof window !== 'undefined') {
+      history.pushState({}, '', '/home')
+    }
   }
 
   async function checkForUpdates() {
@@ -1460,6 +1498,17 @@
   }
 
   onMount(()=>{
+    if (route.kind === 'developers') {
+      isLoading = false
+      return
+    }
+
+    const handlePopState = () => {
+      route = parseRoute(window.location.pathname || '/')
+      isDevelopersPage = route.kind === 'developers'
+    }
+    window.addEventListener('popstate', handlePopState)
+
     // Initialize message cache
     MessageCacheLib.initializeCache().catch(err => console.warn('Failed to initialize message cache:', err))
     
@@ -1551,6 +1600,7 @@
       return () => {
         document.removeEventListener('visibilitychange', handleVisibilityChange)
         clearInterval(sessionInterval)
+        window.removeEventListener('popstate', handlePopState)
       }
     } catch (err) {
       console.error('Fatal onMount error:', err)
@@ -2032,92 +2082,103 @@
 </style>
 
 <div class="flex flex-col h-screen w-screen overflow-hidden bg-bg text-fg">
-  {#if isLoading}
-    <LoadingScreen status={loadingStatus} progress={loadingProgress} />
-  {/if}
-  
-  {#if showPermissionsDialog}
-    <PermissionsDialog 
-      {permissions} 
-      on:request={handlePermissionsRequest}
-      on:skip={handlePermissionsSkip}
-    />
-  {/if}
-  
-  {#if !isLoggedIn && !isLoading}
-    <Auth {id} {keypair} on:authSuccess={handleAuthSuccess} />
-  {:else if !isLoading}
-    <main class="flex flex-1 overflow-hidden relative bg-bg">
-      <div class="sidebar-wrapper" class:hidden-mobile={!showSidebar}>
-        <Sidebar 
-          {contacts} 
-          {groups}
-          {version} 
-          {updateAvailable}
-          {isNewerThanRelease}
-          {latestVersion}
-          {isUpdating}
-          {onlineUsers}
-          userProfile={profiles[id]}
-          userId={id}
-            {profiles}
-          selected={contact} 
-          on:select={(e)=>{ contact = e.detail.id; showSidebar = false; }} 
-          on:openProfile={(e) => {
-            selectedUser = e.detail.userId
-            selectedUserOnline = onlineUsers.has(e.detail.userId)
-            selectedUserCommonGroups = groups.filter(g => g.members.includes(e.detail.userId))
-            loadProfile(e.detail.userId)
-            showUserProfile = true
-          }}
-          on:addContact={(e) => addContact(e.detail.id)} 
-          on:createGroup={(e) => createGroup(e.detail.name, e.detail.members)}
-          on:logout={logout}
-          on:openSettings={openSettings} 
-          on:update={installUpdate}
-        />
-      </div>
-      {#if contact}
-        <div class="chat-wrapper" class:hidden-mobile={showSidebar}>
-          <ChatWindow 
-            currentUserId={id} 
-            contactId={contact}
-            contactName={profiles[contact]?.displayName || contacts.find(c => c.id === contact)?.name}
-            contactProfile={profiles[contact]}
-            messages={currentMessages} 
-            isTyping={contact ? !!typingMap[contact] : false}
-            isSending={isSending}
-            callState={contact === callContact ? callState : 'idle'}
-            isMuted={isMuted}
-            isOnline={contact ? onlineUsers.has(contact) : false}
-            isGroup={contact?.startsWith('#') || false}
-            group={selectedGroup}
-            pinned={pinnedMap[contact] || []}
-            on:send={(e)=>sendTo(e.detail.to, e.detail.text, e.detail.replyTo)} 
-            on:sendFile={(e)=>sendFile(e.detail.to, e.detail.fileData, e.detail.fileName, e.detail.fileType)}
-            on:edit={handleEdit}
-            on:delete={handleDelete}
-            on:react={handleReact}
-            on:togglePin={handleTogglePin}
-            on:typing={handleTyping}
-            on:startCall={startCall}
-            on:endCall={endCall}
-            on:cancelCall={cancelCall}
-            on:toggleMute={toggleMute}
-            on:openGroupSettings={() => {
-              selectedGroup = groups.find(g => g.id === contact)
-              showGroupSettings = true
+  {#if isDevelopersPage}
+    <Developers apiUrl={API_URL} {version} />
+  {:else}
+    {#if isLoading}
+      <LoadingScreen status={loadingStatus} progress={loadingProgress} />
+    {/if}
+
+    {#if showPermissionsDialog}
+      <PermissionsDialog
+        {permissions}
+        on:request={handlePermissionsRequest}
+        on:skip={handlePermissionsSkip}
+      />
+    {/if}
+
+    {#if !isLoggedIn && !isLoading}
+      <Auth {id} {keypair} on:authSuccess={handleAuthSuccess} />
+    {:else if !isLoading}
+      <main class="flex flex-1 overflow-hidden relative bg-bg">
+        <div class="sidebar-wrapper" class:hidden-mobile={!showSidebar}>
+          <Sidebar
+            {contacts}
+            {groups}
+            {version}
+            {updateAvailable}
+            {isNewerThanRelease}
+            {latestVersion}
+            {isUpdating}
+            {onlineUsers}
+            userProfile={profiles[id]}
+            userId={id}
+            selected={contact}
+            on:select={(e) => {
+              contact = e.detail.id
+              showSidebar = false
+              navigateTo(`/chat/${encodeURIComponent(contact)}`)
             }}
-            on:back={() => { contact = null; showSidebar = true; }}
+            on:openProfile={(e) => {
+              selectedUser = e.detail.userId
+              selectedUserOnline = onlineUsers.has(e.detail.userId)
+              selectedUserCommonGroups = groups.filter((g) => g.members.includes(e.detail.userId))
+              loadProfile(e.detail.userId)
+              showUserProfile = true
+            }}
+            on:addContact={(e) => addContact(e.detail.id)}
+            on:createGroup={(e) => createGroup(e.detail.name, e.detail.members)}
+            on:logout={logout}
+            on:openSettings={openSettings}
+            on:update={installUpdate}
           />
         </div>
-      {/if}
-    </main>
+
+        {#if contact}
+          <div class="chat-wrapper" class:hidden-mobile={showSidebar}>
+            <ChatWindow
+              currentUserId={id}
+              contactId={contact}
+              contactName={profiles[contact]?.displayName || contacts.find((c) => c.id === contact)?.name}
+              contactProfile={profiles[contact]}
+              messages={currentMessages}
+              isTyping={contact ? !!typingMap[contact] : false}
+              isSending={isSending}
+              callState={contact === callContact ? callState : 'idle'}
+              isMuted={isMuted}
+              isOnline={contact ? onlineUsers.has(contact) : false}
+              isGroup={contact?.startsWith('#') || false}
+              group={selectedGroup}
+              pinned={pinnedMap[contact] || []}
+              on:send={(e) => sendTo(e.detail.to, e.detail.text, e.detail.replyTo)}
+              on:sendFile={(e) => sendFile(e.detail.to, e.detail.fileData, e.detail.fileName, e.detail.fileType)}
+              on:edit={handleEdit}
+              on:delete={handleDelete}
+              on:react={handleReact}
+              on:togglePin={handleTogglePin}
+              on:typing={handleTyping}
+              on:startCall={startCall}
+              on:endCall={endCall}
+              on:cancelCall={cancelCall}
+              on:toggleMute={toggleMute}
+              on:openGroupSettings={() => {
+                selectedGroup = groups.find((g) => g.id === contact)
+                showGroupSettings = true
+              }}
+              on:back={() => {
+                contact = null
+                showSidebar = true
+              }}
+            />
+          </div>
+        {/if}
+      </main>
+    {/if}
 
     {#if showSettings}
-      <div 
-        class="modal-overlay" 
-        on:click|self={() => showSettings = false} 
+      <div
+        class="modal-overlay"
+        on:click|self={() => (showSettings = false)}
         on:keydown={(e) => e.key === 'Escape' && (showSettings = false)}
         role="button"
         tabindex="-1"
@@ -2125,7 +2186,7 @@
         <div class="modal-content">
           <header class="modal-header">
             <h2 class="modal-title">Settings</h2>
-            <button class="close-btn" on:click={() => showSettings = false}>
+            <button class="close-btn" on:click={() => (showSettings = false)}>
               <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <path d="M18 6L6 18M6 6l12 12" />
               </svg>
@@ -2133,10 +2194,10 @@
           </header>
 
           <div class="settings-tabs" role="tablist">
-            <button class="settings-tab" class:active={settingsTab === 'general'} on:click={() => settingsTab = 'general'} role="tab">General</button>
-            <button class="settings-tab" class:active={settingsTab === 'profile'} on:click={() => settingsTab = 'profile'} role="tab">Profile</button>
-            <button class="settings-tab" class:active={settingsTab === 'notifications'} on:click={() => settingsTab = 'notifications'} role="tab">Notifications</button>
-            <button class="settings-tab" class:active={settingsTab === 'security'} on:click={() => settingsTab = 'security'} role="tab">Security</button>
+            <button class="settings-tab" class:active={settingsTab === 'general'} on:click={() => (settingsTab = 'general')} role="tab">General</button>
+            <button class="settings-tab" class:active={settingsTab === 'profile'} on:click={() => (settingsTab = 'profile')} role="tab">Profile</button>
+            <button class="settings-tab" class:active={settingsTab === 'notifications'} on:click={() => (settingsTab = 'notifications')} role="tab">Notifications</button>
+            <button class="settings-tab" class:active={settingsTab === 'security'} on:click={() => (settingsTab = 'security')} role="tab">Security</button>
           </div>
 
           {#if settingsTab === 'general'}
@@ -2188,8 +2249,9 @@
                     </div>
                   </div>
                   <div class="profile-fields">
-                    <label class="settings-sub-label">Display name</label>
+                    <label class="settings-sub-label" for="settings-display-name">Display name</label>
                     <input
+                      id="settings-display-name"
                       class="settings-input"
                       placeholder="Add a display name"
                       bind:value={settingsProfile.displayName}
@@ -2197,8 +2259,9 @@
                       on:input={markSettingsProfileDirty}
                     />
 
-                    <label class="settings-sub-label">Bio</label>
+                    <label class="settings-sub-label" for="settings-bio">Bio</label>
                     <textarea
+                      id="settings-bio"
                       class="settings-textarea"
                       rows="3"
                       placeholder="Tell people about you"
@@ -2207,9 +2270,10 @@
                       on:input={markSettingsProfileDirty}
                     ></textarea>
 
-                    <label class="settings-sub-label">Avatar</label>
+                    <label class="settings-sub-label" for="settings-avatar-url">Avatar</label>
                     <div class="upload-group">
                       <input
+                        id="settings-avatar-url"
                         class="settings-input"
                         placeholder="https://... or upload"
                         bind:value={settingsProfile.avatarUrl}
@@ -2232,9 +2296,10 @@
                       </button>
                     </div>
 
-                    <label class="settings-sub-label">Banner</label>
+                    <label class="settings-sub-label" for="settings-banner-url">Banner</label>
                     <div class="upload-group">
                       <input
+                        id="settings-banner-url"
                         class="settings-input"
                         placeholder="https://... or upload"
                         bind:value={settingsProfile.bannerUrl}
@@ -2313,20 +2378,20 @@
         </div>
       </div>
     {/if}
-    
+
     {#if showGroupSettings && selectedGroup}
-      <GroupSettings 
+      <GroupSettings
         group={selectedGroup}
         currentUserId={id}
         isOpen={showGroupSettings}
-        on:close={() => showGroupSettings = false}
+        on:close={() => (showGroupSettings = false)}
       />
     {/if}
-    
+
     {#if showUserProfile && selectedUser}
       <UserProfile
         userId={selectedUser}
-        userNickname={profiles[selectedUser]?.displayName || contacts.find(c => c.id === selectedUser)?.name || ''}
+        userNickname={profiles[selectedUser]?.displayName || contacts.find((c) => c.id === selectedUser)?.name || ''}
         profile={profiles[selectedUser]}
         loading={profileLoading}
         error={profileError}
@@ -2335,19 +2400,31 @@
         isOnline={selectedUserOnline}
         commonGroups={selectedUserCommonGroups}
         on:saveProfile={saveProfile}
-        on:startChat={() => { contact = selectedUser; showUserProfile = false }}
-        on:addToContacts={(e) => { addContact(e.detail.userId, e.detail.name); showUserProfile = false }}
-        on:removeFromContacts={(e) => { contacts = contacts.filter(c => c.id !== e.detail.userId); showUserProfile = false }}
+        on:startChat={() => {
+          contact = selectedUser
+          showUserProfile = false
+        }}
+        on:addToContacts={(e) => {
+          addContact(e.detail.userId, e.detail.name)
+          showUserProfile = false
+        }}
+        on:removeFromContacts={(e) => {
+          contacts = contacts.filter((c) => c.id !== e.detail.userId)
+          showUserProfile = false
+        }}
         on:blockUser={() => console.log('Block user:', selectedUser)}
         on:unblockUser={() => console.log('Unblock user:', selectedUser)}
         on:reportUser={() => console.log('Report user:', selectedUser)}
         on:viewEncryptionKey={() => console.log('View key:', selectedUser)}
-        on:viewGroup={(e) => { selectedGroup = groups.find(g => g.id === e.detail.groupId); showGroupSettings = true }}
-        on:close={() => showUserProfile = false}
+        on:viewGroup={(e) => {
+          selectedGroup = groups.find((g) => g.id === e.detail.groupId)
+          showGroupSettings = true
+        }}
+        on:close={() => (showUserProfile = false)}
       />
     {/if}
+
+    <!-- Hidden audio element for remote audio stream -->
+    <audio bind:this={remoteAudioEl} autoplay style="display: none;"></audio>
   {/if}
-  
-  <!-- Hidden audio element for remote audio stream -->
-  <audio bind:this={remoteAudioEl} autoplay style="display: none;"></audio>
 </div>

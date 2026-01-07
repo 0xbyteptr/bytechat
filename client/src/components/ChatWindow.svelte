@@ -378,7 +378,13 @@
     {#if pinnedMessages.length}
       <div class="pinned-bar">
         {#each pinnedMessages as pm (pm.messageId)}
-          <div class="pinned-pill" on:click={() => scrollToMessage(pm.messageId)}>
+          <div
+            class="pinned-pill"
+            role="button"
+            tabindex="0"
+            on:click={() => scrollToMessage(pm.messageId)}
+            on:keydown={(e) => (e.key === 'Enter' || e.key === ' ') && scrollToMessage(pm.messageId)}
+          >
             <span class="pin-icon">📌</span>
             <span class="pill-text">{pm.text || 'Pinned message'}</span>
             {#if pm.messageId}
