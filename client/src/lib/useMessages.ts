@@ -11,11 +11,15 @@ export interface Message {
   replyTo?: { messageId: string; text: string; from: string }
   read?: boolean
   readAt?: number
-  type?: 'text' | 'call' | 'group-update' // message type
+  type?: 'text' | 'call' | 'group-update' | 'voice' // message type
   callData?: {
     duration?: number // duration in seconds
     status: 'missed' | 'completed' | 'cancelled' | 'declined' // call status
     initiator: string // who started the call
+  }
+  voiceData?: {
+    audioUrl?: string // data URL of the audio file
+    duration?: number // duration in seconds
   }
   groupData?: {
     action: 'created' | 'updated' | 'member-added' | 'member-removed' | 'member-promoted'

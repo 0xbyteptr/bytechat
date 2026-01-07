@@ -73,6 +73,79 @@ export function connectWebSocket(
       return
     }
     
+    // Handle voice messages
+    if (msg.type === 'voice') {
+      const chatWith = msg.from
+      
+      // Fetch public key if needed
+      if (!keysMap[msg.from] && !pendingKeys.has(msg.from) && !failedKeys.has(msg.from)) {
+        pendingKeys.add(msg.from)
+        const publicKey = await ContactsLib.fetchPublicKey(apiUrl, msg.from)
+        pendingKeys.delete(msg.from)
+        
+        if (!publicKey) {
+          failedKeys.add(msg.from)
+          console.error(`Failed to fetch public key for ${msg.from}`)
+          return
+        }
+        
+        keysMap[msg.from] = publicKey
+      }
+      
+      try {
+        const hasValidParams = (
+          keypair && keysMap[msg.from] &&
+          typeof msg.cipher === 'string' && typeof msg.nonce === 'string' &&
+          msg.cipher.length > 0 && msg.nonce.length > 0
+        )
+        
+        if (!hasValidParams) {
+          console.warn('Skipping voice message decryption due to invalid params')
+          return
+        }
+        
+        const decrypted = await (cryptoPool
+          ? cryptoPool.decrypt(keypair.secretKey, keysMap[msg.from], msg.cipher, msg.nonce)
+          : decrypt(keypair.secretKey, keysMap[msg.from], msg.cipher, msg.nonce))
+        
+        if (!decrypted) {
+          console.error('Failed to decrypt voice message')
+          return
+        }
+        
+        // Parse voice payload
+        let voicePayload: any
+        try {
+          voicePayload = JSON.parse(decrypted)
+        } catch (e) {
+          console.error('Failed to parse voice payload', e)
+          return
+        }
+        
+        if (!voicePayload.bytechat_voice || !voicePayload.audioData) {
+          console.warn('Invalid voice message payload')
+          return
+        }
+        
+        const msgObj: Message = {
+          from: msg.from,
+          text: '',
+          ts: msg.ts || Date.now(),
+          type: 'voice',
+          voiceData: {
+            audioUrl: voicePayload.audioData,
+            duration: voicePayload.duration
+          }
+        }
+        
+        MessagesLib.addMessage(chatWith, msgObj)
+        handlers.onMessage(msg.from, msgObj, chatWith)
+      } catch (e) {
+        console.error('Failed to process voice message', e)
+      }
+      return
+    }
+    
     // Handle regular messages
     if (msg.type !== 'message') return
     
