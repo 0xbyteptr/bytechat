@@ -43,11 +43,11 @@ class CryptoWorkerPool {
     const id = this.taskCounter++
     this.callbacks.set(id, { resolve, reject })
     
-    // Add timeout to prevent hanging
+    // Add timeout to prevent hanging (30s for slower devices)
     const timeout = setTimeout(() => {
       this.callbacks.delete(id)
       reject(new Error('Crypto operation timeout'))
-    }, 10000)
+    }, 30000)
     
     const originalResolve = resolve
     resolve = (result: any) => {

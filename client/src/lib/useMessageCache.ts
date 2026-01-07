@@ -29,32 +29,76 @@ export async function initializeCache(): Promise<void> {
 }
 
 // Cache a message
-export async function cacheMessage(contactId: string, message: Message): Promise<void> {
-  if (!db) await initializeCache()
+export async function cacheMessage(contactId: string, message: Message | undefined): Promise<void> {
+  if (!message) return // Silently skip if message is undefined
+  if (!db) {
+    try {
+      await initializeCache()
+    } catch (e) {
+      console.warn('Failed to initialize cache:', e)
+      return // Gracefully fail if cache init fails
+    }
+  }
   return new Promise((resolve, reject) => {
-    const transaction = db!.transaction([STORE_NAME], 'readwrite')
-    const store = transaction.objectStore(STORE_NAME)
-    const data = { contactId, ...message }
-    const request = store.put(data)
-    request.onerror = () => reject(request.error)
-    request.onsuccess = () => resolve()
+    try {
+      const transaction = db!.transaction([STORE_NAME], 'readwrite')
+      const store = transaction.objectStore(STORE_NAME)
+      const data = { contactId, ...message }
+      const request = store.put(data)
+      request.onerror = () => {
+        const error = request.error as any
+        if (error?.name === 'QuotaExceededError') {
+          console.warn('IndexedDB quota exceeded, clearing old cache')
+          clearAllCache().then(() => resolve()).catch(() => resolve())
+        } else {
+          reject(error)
+        }
+      }
+      request.onsuccess = () => resolve()
+    } catch (e) {
+      console.warn('Failed to cache message:', e)
+      reject(e)
+    }
   })
 }
 
 // Cache multiple messages
 export async function cacheMessages(contactId: string, messages: Message[]): Promise<void> {
-  if (!db) await initializeCache()
-  return new Promise((resolve, reject) => {
-    const transaction = db!.transaction([STORE_NAME], 'readwrite')
-    const store = transaction.objectStore(STORE_NAME)
-    
-    for (const message of messages) {
-      const data = { contactId, ...message }
-      store.put(data)
+  if (!messages || messages.length === 0) return
+  if (!db) {
+    try {
+      await initializeCache()
+    } catch (e) {
+      console.warn('Failed to initialize cache:', e)
+      return
     }
-    
-    transaction.onerror = () => reject(transaction.error)
-    transaction.oncomplete = () => resolve()
+  }
+  return new Promise((resolve, reject) => {
+    try {
+      const transaction = db!.transaction([STORE_NAME], 'readwrite')
+      const store = transaction.objectStore(STORE_NAME)
+      
+      for (const message of messages) {
+        if (message) {
+          const data = { contactId, ...message }
+          store.put(data)
+        }
+      }
+      
+      transaction.onerror = () => {
+        const error = transaction.error as any
+        if (error?.name === 'QuotaExceededError') {
+          console.warn('IndexedDB quota exceeded, clearing old cache')
+          clearAllCache().then(() => resolve()).catch(() => resolve())
+        } else {
+          reject(error)
+        }
+      }
+      transaction.oncomplete = () => resolve()
+    } catch (e) {
+      console.warn('Failed to cache messages:', e)
+      reject(e)
+    }
   })
 }
 

@@ -469,16 +469,21 @@
       if (msg.type === 'read') {
         const chatWith = msg.from
         if (messagesMap[chatWith] && msg.messageId) {
-          messagesMap = {
-            ...messagesMap,
-            [chatWith]: messagesMap[chatWith].map(m => 
-              (m.messageId === msg.messageId)
-                ? { ...m, read: true, readAt: msg.readAt || Date.now() } 
-                : m
-            )
+          const foundMessage = messagesMap[chatWith].find(m => m.messageId === msg.messageId)
+          if (foundMessage) {
+            messagesMap = {
+              ...messagesMap,
+              [chatWith]: messagesMap[chatWith].map(m => 
+                (m.messageId === msg.messageId)
+                  ? { ...m, read: true, readAt: msg.readAt || Date.now() } 
+                  : m
+              )
+            }
+            // Update cache silently - ignore failures
+            MessageCacheLib.cacheMessage(chatWith, foundMessage).catch(() => {
+              // Silently ignore cache failures
+            })
           }
-          // Update cache
-          MessageCacheLib.cacheMessage(chatWith, messagesMap[chatWith].find(m => m.messageId === msg.messageId)).catch(err => console.warn('Failed to cache read receipt:', err))
         }
         return
       }
