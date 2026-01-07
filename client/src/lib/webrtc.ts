@@ -178,24 +178,32 @@ export class VoIPCall {
   }
 
   hangup() {
-    this.setState('ended')
-
+    // Stop all tracks immediately to release resources
     if (this.localStream) {
-      this.localStream.getTracks().forEach(track => track.stop())
+      this.localStream.getTracks().forEach(track => {
+        try {
+          track.stop()
+        } catch (e) {
+          console.warn('Failed to stop track:', e)
+        }
+      })
       this.localStream = null
     }
 
+    // Close peer connection
     if (this.peerConnection) {
-      this.peerConnection.close()
+      try {
+        this.peerConnection.close()
+      } catch (e) {
+        console.warn('Failed to close peer connection:', e)
+      }
       this.peerConnection = null
     }
 
     this.remoteStream = null
     this.iceCandidateQueue = []
     
-    setTimeout(() => {
-      this.setState('idle')
-    }, 1000)
+    // Don't set state here - let caller handle it to avoid race conditions
   }
 
   toggleMute(): boolean {

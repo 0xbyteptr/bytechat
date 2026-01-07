@@ -119,32 +119,39 @@ export async function handleIceCandidate(candidate: RTCIceCandidateInit): Promis
 }
 
 export function endCall(): void {
-  if (voipCallInstance) {
-    voipCallInstance.hangup()
-  }
-  
-  // Notify remote party that the call ended
-  const remoteContact = getCurrentCallContact()
-  if (remoteContact && sendSignalCallback) {
-    sendSignalCallback('call-end', {}, remoteContact)
-  }
-
-  // Log call duration if call was connected
   const currentState = getCurrentCallState()
   const currentContact = getCurrentCallContact()
   
+  // Only process if there's an active call
+  if (currentState === 'idle' && !currentContact) {
+    return
+  }
+  
+  // Log call duration if call was connected
   if (currentState === 'connected' && callStartTime && currentContact) {
     const duration = Math.floor((Date.now() - callStartTime) / 1000)
     logCallHistory(currentContact, 'completed', duration)
   }
   
   stopCallDurationTimer()
+  
+  // Notify remote party that the call ended BEFORE cleanup
+  if (currentContact && sendSignalCallback) {
+    sendSignalCallback('call-end', {}, currentContact)
+  }
+  
+  // Reset state immediately for UI feedback
   callState.set('idle')
   callContact.set(null)
   isMuted.set(false)
   isCallCancellable.set(false)
   callDuration.set(0)
   callStartTime = null
+  
+  // Clean up WebRTC resources after state is reset
+  if (voipCallInstance) {
+    voipCallInstance.hangup()
+  }
 }
 
 export function cancelCall(): void {

@@ -34,7 +34,16 @@
 </script>
 
 {#if show}
-  <div class="status-selector" role="dialog" aria-modal="true" on:click|stopPropagation>
+  <!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+  <!-- svelte-ignore a11y-click-events-have-key-events -->
+  <div
+    class="status-selector"
+    role="dialog"
+    aria-modal="true"
+    tabindex="-1"
+    on:click|stopPropagation
+    on:keydown|stopPropagation
+  >
     <div class="status-header">
       <h3>Set Status</h3>
       <button class="close-btn" on:click={() => dispatch('close')}>

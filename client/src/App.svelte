@@ -26,6 +26,7 @@
   import { connectWS } from './lib/ws';
   import { decrypt, encrypt } from './lib/crypto';
   import { Capacitor } from '@capacitor/core';
+  import { App } from '@capacitor/app';
   import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
   import { FileOpener } from '@capacitor-community/file-opener';
 
@@ -82,6 +83,8 @@
   let profilesLoading = new Set<string>() // Track which profiles are currently loading
   let profileTimestamps: Record<string, number> = {} // Track when profiles were last fetched
   const PROFILE_CACHE_TTL = 5 * 60 * 1000 // 5 minutes cache TTL
+  const MAX_MESSAGES_PER_CHAT = 500
+  const capMessages = (list: any[] = []) => list.length > MAX_MESSAGES_PER_CHAT ? list.slice(-MAX_MESSAGES_PER_CHAT) : list
   
   // WebSocket state
   let ws: { send: (d: string) => void, close: () => void, readyState: number } | null = null
@@ -101,6 +104,13 @@
   let uploadingBanner = false
   let isAppVisible = true
   let isSending = false
+  const NOTIF_PREF_KEY = 'bytechat_notif_prefs'
+  let notificationPrefs: Record<string, 'all' | 'mentions' | 'mute'> = {}
+  try {
+    notificationPrefs = JSON.parse(localStorage.getItem(NOTIF_PREF_KEY) || '{}')
+  } catch (e) {
+    notificationPrefs = {}
+  }
   let typingTimeout: any = null
   
   // Updates state
@@ -635,9 +645,10 @@
 
         // Use requestIdleCallback for non-urgent UI updates
         const updateMessages = () => {
+          const nextList = [...(messagesMap[chatWith]||[]), msgObj].sort((a, b) => (a.ts || 0) - (b.ts || 0))
           messagesMap = {
             ...messagesMap,
-            [chatWith]: [...(messagesMap[chatWith]||[]), msgObj].sort((a, b) => (a.ts || 0) - (b.ts || 0))
+            [chatWith]: capMessages(nextList)
           }
           // Cache the message
           MessageCacheLib.cacheMessage(chatWith, msgObj).catch(err => console.warn('Failed to cache message:', err))
@@ -656,15 +667,22 @@
         // For live messages, update immediately
         updateMessages()
 
+        const pref = notificationPrefs[chatWith] || 'all'
+        const isMention = typeof text === 'string' && id && text.toLowerCase().includes(`@${id.toLowerCase()}`)
+
         if (chatWith !== contact) {
           unreadMap = { ...unreadMap, [chatWith]: (unreadMap[chatWith] || 0) + 1 }
-          const displayMsg = msgObj.file ? `Sent a file: ${msgObj.file.fileName}` : text
-          const shortMsg = displayMsg.length > 50 ? displayMsg.slice(0, 50) + '...' : displayMsg
-          NotificationsLib.notify(chatWith, shortMsg, isAppVisible, contact)
+          if (pref !== 'mute' && (pref === 'all' || isMention)) {
+            const displayMsg = msgObj.file ? `Sent a file: ${msgObj.file.fileName}` : text
+            const shortMsg = displayMsg.length > 50 ? displayMsg.slice(0, 50) + '...' : displayMsg
+            NotificationsLib.notify(chatWith, shortMsg, isAppVisible, contact)
+          }
         } else if (!isAppVisible) {
-          const displayMsg = msgObj.file ? `Sent a file: ${msgObj.file.fileName}` : text
-          const shortMsg = displayMsg.length > 50 ? displayMsg.slice(0, 50) + '...' : displayMsg
-          NotificationsLib.notify(chatWith, shortMsg, isAppVisible, contact)
+          if (pref !== 'mute' && (pref === 'all' || isMention)) {
+            const displayMsg = msgObj.file ? `Sent a file: ${msgObj.file.fileName}` : text
+            const shortMsg = displayMsg.length > 50 ? displayMsg.slice(0, 50) + '...' : displayMsg
+            NotificationsLib.notify(chatWith, shortMsg, isAppVisible, contact)
+          }
         }
       } catch (e) {
         console.error('Failed to process message', e)
@@ -1405,6 +1423,16 @@
     }
   }
 
+  function setNotificationPref(chatId: string, mode: 'all' | 'mentions' | 'mute') {
+    if (!chatId) return
+    notificationPrefs = { ...notificationPrefs, [chatId]: mode }
+    try {
+      localStorage.setItem(NOTIF_PREF_KEY, JSON.stringify(notificationPrefs))
+    } catch (e) {
+      console.warn('Failed to persist notification prefs', e)
+    }
+  }
+
   async function saveProfile(e: CustomEvent<{ profile: any }>) {
     const p = e.detail?.profile
     if (!p || !sessionToken || p.id !== id) return
@@ -1632,11 +1660,12 @@
           contact = s.lastContact || null
           if (id && sessionToken && keypair) {
             isLoggedIn = true
+            // Rebuild contacts from restored messagesMap
+            rebuildContacts()
             connect()
             NotificationsLib.setupNotifications(id, sessionToken, API_URL)
             loadProfile(id)
-            // Validate session after a delay to allow WebSocket to connect first
-            setTimeout(() => validateSession(), 5000)
+            // Skip immediate validation - let periodic check handle it
           }
         } catch (e) {
           console.error('Failed to restore session:', e)
@@ -1655,10 +1684,11 @@
               contact = s.lastContact || null
               if (id && sessionToken && keypair) {
                 isLoggedIn = true
+                // Rebuild contacts from restored messagesMap
+                rebuildContacts()
                 connect()
                 NotificationsLib.setupNotifications(id, sessionToken, API_URL)
                 loadProfile(id)
-                setTimeout(() => validateSession(), 2000)
                 console.log('Restored from backup')
               }
             }
@@ -1676,6 +1706,83 @@
         }
       }, 300000)
 
+      // Handle Android back button and keyboard
+      if (Capacitor.isNativePlatform()) {
+        if (Capacitor.getPlatform() === 'android') {
+          // Handle back button
+          App.addListener('backButton', () => {
+            // If in a call, end the call instead of exiting app
+            const currentCallState = VoipLib.callState
+            let callStateValue: string = 'idle'
+            const unsubscribe = currentCallState.subscribe(value => callStateValue = value)
+            unsubscribe()
+            
+            if (callStateValue !== 'idle') {
+              console.log('Back button: ending active call')
+              endCall()
+              return
+            }
+            
+            // If sidebar is hidden (showing chat), go back to sidebar
+            if (showSidebar === false && contact) {
+              console.log('Back button: closing chat')
+              contact = null
+              showSidebar = true
+              navigateTo('/home')
+              return
+            }
+            
+            // Otherwise exit app
+            console.log('Back button: exiting app')
+            App.exitApp()
+          })
+          
+          // Handle keyboard show/hide to adjust UI
+          try {
+            // @ts-ignore - Keyboard API
+            const { Keyboard } = Capacitor.Plugins
+            if (Keyboard) {
+              Keyboard.addListener('keyboardWillShow', () => {
+                document.documentElement.style.setProperty('--keyboard-open', '1')
+              })
+              
+              Keyboard.addListener('keyboardWillHide', () => {
+                document.documentElement.style.setProperty('--keyboard-open', '0')
+              })
+            }
+          } catch (e) {
+            console.warn('Failed to setup keyboard listeners:', e)
+          }
+          
+          // Set initial keyboard state
+          document.documentElement.style.setProperty('--keyboard-open', '0')
+        }
+        
+        // Setup status bar for both Android and iOS
+        try {
+          // @ts-ignore - StatusBar API
+          const { StatusBar } = Capacitor.Plugins
+          if (StatusBar) {
+            StatusBar.setBackgroundColor({ color: '#313244' })
+            StatusBar.setStyle({ style: 'DARK' })
+            StatusBar.setOverlaysWebView({ overlay: false })
+          }
+        } catch (e) {
+          console.warn('Failed to setup status bar:', e)
+        }
+        
+        // Keep screen on during calls
+        try {
+          // @ts-ignore - ScreenBrightness API
+          const { ScreenOrientation } = Capacitor.Plugins
+          if (ScreenOrientation) {
+            ScreenOrientation.lock({ orientation: 'PORTRAIT' })
+          }
+        } catch (e) {
+          console.warn('Failed to lock screen orientation:', e)
+        }
+      }
+
       return () => {
         document.removeEventListener('visibilitychange', handleVisibilityChange)
         clearInterval(sessionInterval)
@@ -1687,6 +1794,20 @@
   })
   
   onDestroy(() => {
+    // End any active calls before cleanup
+    const currentCallState = VoipLib.callState
+    let callStateValue: string = 'idle'
+    const unsubscribe = currentCallState.subscribe(value => callStateValue = value)
+    unsubscribe()
+    
+    if (callStateValue !== 'idle') {
+      try {
+        endCall()
+      } catch (e) {
+        console.warn('Failed to end call during cleanup:', e)
+      }
+    }
+    
     // Clean up crypto worker pool to prevent memory leaks
     if (cryptoPool) {
       cryptoPool.terminate()
@@ -1695,6 +1816,33 @@
     if (contactsDebounce) clearTimeout(contactsDebounce)
     if (typingTimeout) clearTimeout(typingTimeout)
   })
+
+  // Rebuild contacts from messagesMap (used on session restore)
+  function rebuildContacts() {
+    if (contactsDebounce) clearTimeout(contactsDebounce)
+    contactsDebounce = setTimeout(() => {
+      const dm = Object.keys(messagesMap)
+        .filter(k => !k.startsWith('#'))
+        .map(k => {
+          const msgs = messagesMap[k] || []
+          const lastMsg = msgs.length ? msgs[msgs.length - 1] : undefined
+          const lastTs = lastMsg?.ts ?? 0
+          return {
+            id: k,
+            last: lastMsg?.text ?? '',
+            unread: unreadMap[k] || 0,
+            _ts: lastTs
+          }
+        })
+        .sort((a, b) => {
+          if (b._ts !== a._ts) return b._ts - a._ts
+          return (b.unread || 0) - (a.unread || 0)
+        })
+        .map(({ _ts, ...rest }) => rest)
+      contacts = dm
+      console.log('Contacts rebuilt from messagesMap:', contacts.length, 'contacts')
+    }, 50)
+  }
 
   // Session saving with backup and compression
   let saveTimeout: any = null
@@ -1885,11 +2033,12 @@
     width: 320px;
     height: 100%;
     flex-shrink: 0;
-    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s;
     background: var(--surface);
     padding-left: env(safe-area-inset-left);
+    z-index: 10;
   }
-
+  
   .chat-wrapper {
     flex: 1;
     height: 100%;
@@ -1898,6 +2047,7 @@
     display: flex;
     flex-direction: column;
     padding-right: env(safe-area-inset-right);
+    padding-bottom: env(safe-area-inset-bottom);
   }
 
   .modal-overlay {
@@ -2231,12 +2381,14 @@
               isGroup={contact?.startsWith('#') || false}
               group={selectedGroup}
               pinned={pinnedMap[contact] || []}
+              notificationMode={notificationPrefs[contact] || 'all'}
               on:send={(e) => sendTo(e.detail.to, e.detail.text, e.detail.replyTo)}
               on:sendFile={(e) => sendFile(e.detail.to, e.detail.fileData, e.detail.fileName, e.detail.fileType)}
               on:sendVoice={(e) => sendVoice(e.detail.to, e.detail.audioBlob, e.detail.duration)}
               on:edit={handleEdit}
               on:delete={handleDelete}
               on:react={handleReact}
+              on:setNotificationMode={(e) => setNotificationPref(contact, e.detail.mode)}
               on:togglePin={handleTogglePin}
               on:typing={handleTyping}
               on:startCall={startCall}

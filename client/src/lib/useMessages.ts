@@ -26,6 +26,8 @@ export interface Message {
   failedDecrypt?: boolean
 }
 
+const MAX_MESSAGES_PER_CHAT = 500
+
 export const messagesMap = writable<Record<string, Message[]>>({})
 export const unreadMap = writable<Record<string, number>>({})
 export const typingMap = writable<Record<string, boolean>>({})
@@ -47,7 +49,9 @@ export function getCurrentMessages(contactId: string | null): Message[] {
 export function addMessage(contactId: string, message: Message) {
   messagesMap.update(map => {
     const existing = map[contactId] || []
-    return { ...map, [contactId]: [...existing, message] }
+    const next = [...existing, message]
+    const trimmed = next.length > MAX_MESSAGES_PER_CHAT ? next.slice(-MAX_MESSAGES_PER_CHAT) : next
+    return { ...map, [contactId]: trimmed }
   })
 }
 

@@ -426,13 +426,6 @@ node -e "const nacl=require('tweetnacl');const k=nacl.box.keyPair();console.log(
     font-weight: 700;
   }
   
-  .label { 
-    font-weight: 700; 
-    font-size: 18px;
-    margin: 0;
-    color: var(--accent);
-  }
-  
   .body { 
     margin: 0; 
     opacity: 0.9;

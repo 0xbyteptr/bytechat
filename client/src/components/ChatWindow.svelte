@@ -1,7 +1,9 @@
 <script lang="ts">
   import MessageBubble from './MessageBubble.svelte'
+  import FormattingToolbar from './FormattingToolbar.svelte'
   import VoiceRecorder from './VoiceRecorder.svelte'
   import { createEventDispatcher, afterUpdate, tick } from 'svelte'
+  import { formatTimestamp, isMentioned } from '../lib/chatEnhancements'
   export let currentUserId: string
   export let contactId: string | null = null
   export let contactName: string | null = null
@@ -11,6 +13,7 @@
   export let isMuted = false
   export let isOnline = false
   export let isGroup = false
+  export let notificationMode: 'all' | 'mentions' | 'mute' = 'all'
   // @ts-ignore - external reference
   export const group: any = null
   interface Message {
@@ -50,6 +53,13 @@
   let shouldAutoScroll = true
   let prevMessageCount = 0
   let searchTerm = ''
+  let showSearchMobile = false
+  let showNotifMenu = false
+  const notifLabels: Record<'all' | 'mentions' | 'mute', string> = {
+    all: 'All messages',
+    mentions: 'Mentions only',
+    mute: 'Muted'
+  }
 
   $: filteredMessages = searchTerm
     ? messages.filter(m => (m.text || '').toLowerCase().includes(searchTerm.toLowerCase()))
@@ -202,6 +212,11 @@
       node.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }
   }
+
+  function setNotificationMode(mode: 'all' | 'mentions' | 'mute') {
+    dispatch('setNotificationMode', { mode })
+    showNotifMenu = false
+  }
   
   function handleFile(e: Event) {
     const file = (e.target as HTMLInputElement).files?.[0]
@@ -329,10 +344,49 @@
     
         <div class="actions">
           <div class="search-bar">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" />
-            </svg>
-            <input placeholder="Search messages" bind:value={searchTerm} />
+            <button class="search-toggle" on:click={() => showSearchMobile = !showSearchMobile} aria-label="Search messages">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2">
+                <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" />
+              </svg>
+            </button>
+            <div class:active={showSearchMobile} class="search-input-wrapper">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" />
+              </svg>
+              <input placeholder="Search messages" bind:value={searchTerm} on:focus={() => showSearchMobile = true} />
+            </div>
+          </div>
+
+          <div class="notif-control">
+            <button class="icon-button" on:click={() => showNotifMenu = !showNotifMenu} title="Notification settings">
+              {#if notificationMode === 'mute'}
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M9 9v-1a3 3 0 0 1 6 0v1" />
+                  <path d="M5 12v-2a7 7 0 0 1 14 0v2" />
+                  <path d="M5 12l14 0" />
+                  <path d="M10 17a2 2 0 0 0 4 0" />
+                  <line x1="4" y1="4" x2="20" y2="20" />
+                </svg>
+              {:else if notificationMode === 'mentions'}
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                  <circle cx="12" cy="8" r="1" />
+                </svg>
+              {:else}
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                </svg>
+              {/if}
+            </button>
+            {#if showNotifMenu}
+              <div class="notif-menu">
+                <button class:active={notificationMode === 'all'} on:click={() => setNotificationMode('all')}>All messages</button>
+                <button class:active={notificationMode === 'mentions'} on:click={() => setNotificationMode('mentions')}>Mentions only</button>
+                <button class:active={notificationMode === 'mute'} on:click={() => setNotificationMode('mute')}>Muted</button>
+              </div>
+            {/if}
           </div>
 
           <div class="call-controls">
@@ -476,6 +530,7 @@
     {/if}
 
     <footer class="chat-footer">
+      <FormattingToolbar {textareaEl} compact={false} />
       <div class="input-container">
         <input 
           type="file" 
@@ -647,12 +702,37 @@
     display: flex;
     align-items: center;
     gap: 0.35rem;
+    color: var(--subtext);
+    min-width: 180px;
+  }
+
+  .search-input-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
     background: var(--surface-lighter);
     border: 1px solid var(--surface-lighter);
     border-radius: 12px;
     padding: 0.35rem 0.5rem;
+    flex: 1;
+  }
+
+  .search-toggle {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface-lighter);
+    border: 1px solid var(--surface-lighter);
+    border-radius: 12px;
+    padding: 0.35rem;
     color: var(--subtext);
-    min-width: 180px;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .search-toggle:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.18);
   }
 
   .search-bar input {
@@ -668,10 +748,77 @@
     color: var(--subtext);
   }
 
+  .notif-control {
+    position: relative;
+  }
+
+  .notif-menu {
+    position: absolute;
+    top: 110%;
+    right: 0;
+    background: var(--surface);
+    border: 1px solid var(--surface-lighter);
+    border-radius: 12px;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.25);
+    display: flex;
+    flex-direction: column;
+    min-width: 160px;
+    z-index: 12;
+    overflow: hidden;
+  }
+
+  .notif-menu button {
+    background: none;
+    border: none;
+    color: var(--fg);
+    text-align: left;
+    padding: 0.75rem 0.9rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+
+  .notif-menu button:hover {
+    background: var(--surface-lighter);
+  }
+
+  .notif-menu button.active {
+    background: var(--accent-faint);
+    color: var(--accent);
+    font-weight: 700;
+  }
+
   .typing-indicator {
     color: var(--accent);
     font-weight: 700;
     animation: pulse 1.5s infinite;
+  }
+
+  @media (max-width: 720px) {
+    .search-bar {
+      position: relative;
+      min-width: auto;
+      gap: 0.4rem;
+    }
+
+    .search-toggle {
+      display: flex;
+    }
+
+    .search-input-wrapper {
+      display: none;
+      position: absolute;
+      top: 110%;
+      right: 0;
+      width: min(260px, 80vw);
+      background: var(--surface);
+      border: 1px solid var(--surface-lighter);
+      box-shadow: 0 12px 30px rgba(0,0,0,0.25);
+      z-index: 10;
+    }
+
+    .search-input-wrapper.active {
+      display: flex;
+    }
   }
 
   @keyframes pulse {

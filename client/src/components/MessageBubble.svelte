@@ -32,11 +32,135 @@
   
   const dispatch = createEventDispatcher()
   let showActions = false
+  let audioEl: HTMLAudioElement | null = null
+  let voiceProgress = 0
+  let voiceDuration = msg.voiceData?.duration || 0
+  let isVoicePlaying = false
+  let playbackRate: number = 1
+  const speedOptions = [0.75, 1, 1.25, 1.5, 2]
+  let previewUrl: string | null = null
+  let previewData: { host: string; path: string; url: string } | null = null
+  let embed: { type: 'youtube'; id: string } | null = null
+
+  function extractFirstUrl(text: string | undefined): string | null {
+    if (!text) return null
+    const match = text.match(/https?:\/\/[^\s]+/i)
+    if (!match) return null
+    return match[0].replace(/[),.!]+$/, '')
+  }
+
+  function buildPreview(url: string): { host: string; path: string; url: string } | null {
+    try {
+      const u = new URL(url)
+      const host = u.hostname.replace(/^www\./, '')
+      const pathRaw = u.pathname + (u.search || '')
+      const path = pathRaw.length > 50 ? pathRaw.slice(0, 50) + '...' : pathRaw || '/'
+      return { host, path, url }
+    } catch (e) {
+      return null
+    }
+  }
+
+  function getEmbed(url: string): { type: 'youtube'; id: string } | null {
+    try {
+      const u = new URL(url)
+      const host = u.hostname.replace(/^www\./, '')
+      if (host === 'youtube.com' || host === 'www.youtube.com' || host === 'youtu.be') {
+        let id = ''
+        if (host === 'youtu.be') {
+          id = u.pathname.slice(1)
+        } else if (u.searchParams.get('v')) {
+          id = u.searchParams.get('v') || ''
+        }
+        if (id) return { type: 'youtube', id }
+      }
+    } catch (e) {
+      return null
+    }
+    return null
+  }
+
+  $: previewUrl = extractFirstUrl(msg.text)
+  $: previewData = previewUrl ? buildPreview(previewUrl) : null
+  $: embed = previewUrl ? getEmbed(previewUrl) : null
+
+  function onVoiceLoaded() {
+    if (audioEl) {
+      voiceDuration = msg.voiceData?.duration || audioEl.duration || voiceDuration
+    }
+  }
+
+  function onVoiceTime() {
+    if (audioEl) {
+      voiceProgress = audioEl.currentTime
+    }
+  }
+
+  function toggleVoicePlay() {
+    if (!audioEl) return
+    if (audioEl.paused) {
+      audioEl.play()
+      isVoicePlaying = true
+    } else {
+      audioEl.pause()
+      isVoicePlaying = false
+    }
+  }
+
+  function seekVoice(event: Event) {
+    if (!audioEl) return
+    const target = event.target as HTMLInputElement
+    const val = Number(target.value)
+    audioEl.currentTime = val
+    voiceProgress = val
+  }
+
+  function handleVoiceSpeedChange(event: Event) {
+    const target = event.target as HTMLSelectElement
+    setVoiceSpeed(Number(target.value))
+  }
+
+  function setVoiceSpeed(rate: number) {
+    playbackRate = rate
+    if (audioEl) {
+      audioEl.playbackRate = rate
+    }
+  }
 
   function fmt(ts?: number) {
     if(!ts) return ''
     const d = new Date(ts)
     return d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})
+  }
+  
+  function formatFullTimestamp(ts?: number): string {
+    if (!ts) return ''
+    const d = new Date(ts)
+    return d.toLocaleString([], {
+      weekday: 'short',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
+  }
+  
+  function getReadReceiptText(readAt?: number): string {
+    if (!readAt) return 'sending...'
+    const d = new Date(readAt)
+    const now = new Date()
+    const diffMs = now.getTime() - d.getTime()
+    const diffMins = Math.floor(diffMs / 60000)
+    
+    if (diffMins === 0) return 'read now'
+    if (diffMins < 60) return `read ${diffMins}m ago`
+    
+    const diffHours = Math.floor(diffMins / 60)
+    if (diffHours < 24) return `read ${diffHours}h ago`
+    
+    return `read ${Math.floor(diffHours / 24)}d ago`
   }
 
   function isImage(type: string) {
@@ -145,13 +269,69 @@
       </div>
     {:else if msg.type === 'voice' && msg.voiceData}
       <div class="voice-message">
-        <audio controls src={msg.voiceData.audioUrl}></audio>
-        {#if msg.voiceData.duration}
-          <span class="voice-duration">{formatVoiceDuration(msg.voiceData.duration)}</span>
-        {/if}
+        <div class="voice-controls">
+          <button class="voice-btn" on:click={toggleVoicePlay} aria-label={isVoicePlaying ? 'Pause' : 'Play'}>
+            {#if isVoicePlaying}
+              ❚❚
+            {:else}
+              ▶
+            {/if}
+          </button>
+          <div class="voice-progress">
+            <input
+              type="range"
+              min="0"
+              max={voiceDuration || (audioEl ? audioEl.duration : 0) || 0}
+              step="0.1"
+              value={voiceProgress}
+              on:input={seekVoice}
+            >
+            <div class="voice-times">
+              {formatVoiceDuration(voiceProgress)} / {formatVoiceDuration(voiceDuration || (audioEl ? audioEl.duration : 0) || 0)}
+            </div>
+          </div>
+          <select
+            class="voice-speed"
+            bind:value={playbackRate}
+            on:change={handleVoiceSpeedChange}
+          >
+            {#each speedOptions as s}
+              <option value={s}>{s}x</option>
+            {/each}
+          </select>
+        </div>
+        <audio
+          bind:this={audioEl}
+          bind:playbackRate={playbackRate}
+          src={msg.voiceData.audioUrl}
+          on:timeupdate={onVoiceTime}
+          on:loadedmetadata={onVoiceLoaded}
+          on:ended={() => {
+            isVoicePlaying = false
+            voiceProgress = 0
+          }}
+        ></audio>
       </div>
     {:else}
       <div class="text">{@html renderMarkdown(msg.text)}</div>
+      {#if previewData}
+        {#if embed && embed.type === 'youtube'}
+          <div class="embed-card">
+            <iframe
+              src={`https://www.youtube.com/embed/${embed.id}?modestbranding=1&rel=0`}
+              title="Embedded video"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowfullscreen
+              loading="lazy"
+            ></iframe>
+          </div>
+        {:else}
+          <a class="link-preview" href={previewData.url} target="_blank" rel="noopener noreferrer">
+            <div class="lp-host">{previewData.host}</div>
+            <div class="lp-path">{previewData.path}</div>
+          </a>
+        {/if}
+      {/if}
     {/if}
     
     <div class="meta">
@@ -505,20 +685,102 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    min-width: 250px;
+    min-width: 260px;
   }
   
-  .voice-message audio {
+  .voice-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: rgba(0,0,0,0.1);
+    padding: 0.5rem;
+    border-radius: 10px;
+  }
+
+  .message-row.is-own .voice-controls {
+    background: rgba(255,255,255,0.15);
+  }
+
+  .voice-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    border: 1px solid var(--surface-lighter);
+    background: var(--surface);
+    color: var(--fg);
+    cursor: pointer;
+    font-weight: 800;
+  }
+
+  .message-row.is-own .voice-btn {
+    background: rgba(255,255,255,0.2);
+    color: var(--accent-fg);
+  }
+
+  .voice-progress {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .voice-progress input[type="range"] {
     width: 100%;
-    height: 36px;
-    border-radius: 8px;
+    accent-color: var(--accent);
   }
-  
-  .voice-duration {
+
+  .voice-times {
     font-size: 11px;
     font-family: var(--font-mono);
-    opacity: 0.7;
-    text-align: right;
+    opacity: 0.75;
+  }
+
+  .voice-speed {
+    border: 1px solid var(--surface-lighter);
+    background: var(--surface);
+    color: var(--fg);
+    border-radius: 8px;
+    padding: 0.3rem 0.4rem;
+  }
+
+  .link-preview {
+    display: block;
+    margin-top: 8px;
+    padding: 10px 12px;
+    background: rgba(0,0,0,0.08);
+    border-radius: 10px;
+    border: 1px solid rgba(0,0,0,0.08);
+    color: var(--fg);
+    text-decoration: none;
+  }
+
+  .message-row.is-own .link-preview {
+    background: rgba(255,255,255,0.18);
+    border-color: rgba(255,255,255,0.2);
+    color: var(--accent-fg);
+  }
+
+  .lp-host {
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+
+  .lp-path {
+    font-size: 12px;
+    opacity: 0.75;
+  }
+
+  .embed-card {
+    margin-top: 8px;
+    border-radius: 10px;
+    overflow: hidden;
+    background: rgba(0,0,0,0.1);
+  }
+
+  .embed-card iframe {
+    width: 100%;
+    min-height: 200px;
+    border: none;
   }
   
   /* Markdown styles */
