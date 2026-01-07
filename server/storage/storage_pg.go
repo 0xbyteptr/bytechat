@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"bytechat/models"
+
+	"github.com/lib/pq"
 )
 
 // Keys management
@@ -394,6 +397,104 @@ func GetHistory(id string) []models.StoredMessage {
 	}
 
 	return history
+}
+
+// Reactions management
+func ToggleReaction(conversationID, messageID, emoji, userID string) (bool, error) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	tx, err := db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+
+	var exists bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM message_reactions WHERE conversation_id = $1 AND message_id = $2 AND emoji = $3 AND user_id = $4)`, conversationID, messageID, emoji, userID).Scan(&exists); err != nil {
+		return false, err
+	}
+
+	if exists {
+		if _, err := tx.Exec(`DELETE FROM message_reactions WHERE conversation_id = $1 AND message_id = $2 AND emoji = $3 AND user_id = $4`, conversationID, messageID, emoji, userID); err != nil {
+			return false, err
+		}
+	} else {
+		if _, err := tx.Exec(`INSERT INTO message_reactions (conversation_id, message_id, emoji, user_id) VALUES ($1, $2, $3, $4)`, conversationID, messageID, emoji, userID); err != nil {
+			return false, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+
+	return !exists, nil
+}
+
+func GetReactions(conversationID string, messageIDs []string) map[string]map[string][]string {
+	result := make(map[string]map[string][]string)
+	if len(messageIDs) == 0 {
+		return result
+	}
+
+	mu.RLock()
+	rows, err := db.Query(`SELECT message_id, emoji, user_id FROM message_reactions WHERE conversation_id = $1 AND message_id = ANY($2)`, conversationID, pq.Array(messageIDs))
+	mu.RUnlock()
+	if err != nil {
+		log.Printf("Error getting reactions: %v\n", err)
+		return result
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var mid, emoji, user string
+		if err := rows.Scan(&mid, &emoji, &user); err != nil {
+			continue
+		}
+		if _, ok := result[mid]; !ok {
+			result[mid] = make(map[string][]string)
+		}
+		result[mid][emoji] = append(result[mid][emoji], user)
+	}
+
+	return result
+}
+
+// User profiles management
+func SaveProfile(p models.Profile) error {
+	mu.Lock()
+	defer mu.Unlock()
+
+	if p.UpdatedAt.IsZero() {
+		p.UpdatedAt = time.Now()
+	}
+
+	query := `
+		INSERT INTO user_profiles (id, display_name, bio, avatar_url, banner_url, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (id) DO UPDATE
+		SET display_name = $2, bio = $3, avatar_url = $4, banner_url = $5, updated_at = $6
+	`
+	_, err := db.Exec(query, p.ID, p.DisplayName, p.Bio, p.AvatarURL, p.BannerURL, p.UpdatedAt)
+	return err
+}
+
+func GetProfile(id string) (*models.Profile, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	var p models.Profile
+	err := db.QueryRow(`SELECT id, display_name, bio, avatar_url, banner_url, updated_at FROM user_profiles WHERE id = $1`, id).
+		Scan(&p.ID, &p.DisplayName, &p.Bio, &p.AvatarURL, &p.BannerURL, &p.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, false
+	}
+	if err != nil {
+		log.Printf("Error getting profile: %v\n", err)
+		return nil, false
+	}
+	return &p, true
 }
 
 // Push tokens management

@@ -80,6 +80,29 @@ func BroadcastPresence() {
 	}
 }
 
+func conversationID(a, b string) string {
+	// Groups use the group id as the stable conversation id
+	if strings.HasPrefix(a, "#") {
+		return a
+	}
+	if strings.HasPrefix(b, "#") {
+		return b
+	}
+	if a < b {
+		return a + "|" + b
+	}
+	return b + "|" + a
+}
+
+func messageIDFromMap(m map[string]interface{}) string {
+	if v, ok := m["messageId"]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
 // Handler handles WebSocket connections
 func Handler(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -163,10 +186,18 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		history := storage.GetHistory(id)
+		directReactions := buildDirectReactionLookup(id, history)
 		for _, sm := range history {
 			other := sm.From
 			if sm.From == id {
 				other = sm.To
+			}
+			msgID := messageIDFromMap(sm.Msg)
+			convID := conversationID(id, other)
+			if msgID != "" {
+				if r := directReactions[convID][msgID]; len(r) > 0 {
+					sm.Msg["reactions"] = r
+				}
 			}
 			sm.Msg["from"] = sm.From
 			sm.Msg["chatWith"] = other
@@ -177,7 +208,14 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		memberGroups := storage.GetAllGroupIDs(id)
 		for _, gid := range memberGroups {
 			gh := storage.GetHistory(gid)
+			groupReactions := buildGroupReactionLookup(gid, gh)
 			for _, sm := range gh {
+				msgID := messageIDFromMap(sm.Msg)
+				if msgID != "" {
+					if r := groupReactions[msgID]; len(r) > 0 {
+						sm.Msg["reactions"] = r
+					}
+				}
 				sm.Msg["from"] = sm.From
 				sm.Msg["chatWith"] = gid
 				sm.Msg["isHistory"] = true
@@ -303,6 +341,54 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			clientsMux.RUnlock()
 			if ok {
 				senderClient.Send(msg)
+			}
+			continue
+		}
+
+		// Handle reactions
+		if msgType, ok := msg["type"].(string); ok && msgType == "react" {
+			to, _ := msg["to"].(string)
+			messageID, _ := msg["messageId"].(string)
+			emoji, _ := msg["emoji"].(string)
+
+			if to == "" || messageID == "" || emoji == "" {
+				continue
+			}
+
+			convID := conversationID(id, to)
+			if _, err := storage.ToggleReaction(convID, messageID, emoji, id); err != nil {
+				log.Printf("reaction toggle error: %v\n", err)
+			}
+
+			out := map[string]interface{}{
+				"type":      "react",
+				"from":      id,
+				"messageId": messageID,
+				"emoji":     emoji,
+				"chatWith":  to,
+			}
+
+			if strings.HasPrefix(to, "#") {
+				g, err := storage.GetGroup(to)
+				if err == nil {
+					clientsMux.RLock()
+					for _, m := range g.Members {
+						if m == id {
+							continue
+						}
+						if tc, ok := clients[m]; ok {
+							tc.Send(out)
+						}
+					}
+					clientsMux.RUnlock()
+				}
+			} else {
+				clientsMux.RLock()
+				toClient, ok := clients[to]
+				clientsMux.RUnlock()
+				if ok {
+					toClient.Send(out)
+				}
 			}
 			continue
 		}
@@ -437,4 +523,37 @@ func jsonTime(v interface{}) int64 {
 func jsonMarshal(v interface{}) []byte {
 	data, _ := json.Marshal(v)
 	return data
+}
+
+func buildDirectReactionLookup(selfID string, history []models.StoredMessage) map[string]map[string]map[string][]string {
+	convToMsgIDs := make(map[string][]string)
+	for _, sm := range history {
+		msgID := messageIDFromMap(sm.Msg)
+		if msgID == "" {
+			continue
+		}
+		other := sm.From
+		if sm.From == selfID {
+			other = sm.To
+		}
+		convID := conversationID(selfID, other)
+		convToMsgIDs[convID] = append(convToMsgIDs[convID], msgID)
+	}
+
+	lookup := make(map[string]map[string]map[string][]string)
+	for convID, ids := range convToMsgIDs {
+		lookup[convID] = storage.GetReactions(convID, ids)
+	}
+	return lookup
+}
+
+func buildGroupReactionLookup(conversationID string, history []models.StoredMessage) map[string]map[string][]string {
+	ids := make([]string, 0, len(history))
+	for _, sm := range history {
+		msgID := messageIDFromMap(sm.Msg)
+		if msgID != "" {
+			ids = append(ids, msgID)
+		}
+	}
+	return storage.GetReactions(conversationID, ids)
 }

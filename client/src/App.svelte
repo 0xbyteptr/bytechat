@@ -9,7 +9,6 @@
   import LoadingScreen from './components/LoadingScreen.svelte'
   import PermissionsDialog from './components/PermissionsDialog.svelte'
   import pkg from '../package.json'
-  import { inject } from '@vercel/analytics'
   
   // Composables
   import * as PermissionsLib from './lib/usePermissions'
@@ -23,11 +22,11 @@
   import * as FileHandlingLib from './lib/useFileHandling'
   import * as MessageCacheLib from './lib/useMessageCache'
   import type { CallState } from './lib/webrtc'
-    import { connectWS } from './lib/ws';
-    import { decrypt, encrypt } from './lib/crypto';
-    import { Capacitor } from '@capacitor/core';
-    import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
-    import { FileOpener } from '@capacitor-community/file-opener';
+  import { connectWS } from './lib/ws';
+  import { decrypt, encrypt } from './lib/crypto';
+  import { Capacitor } from '@capacitor/core';
+  import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
+  import { FileOpener } from '@capacitor-community/file-opener';
 
   const API_URL = import.meta.env.VITE_API_URL || 'https://api.byteptr.xyz'
   const version = pkg.version
@@ -48,6 +47,10 @@
   let typingMap: Record<string, boolean> = {}
   let pendingKeys = new Set<string>()
   let failedKeys = new Set<string>()
+  let pinnedMap: Record<string, string[]> = {}
+  let profiles: Record<string, any> = {}
+  let profileLoading = false
+  let profileError = ''
   
   // WebSocket state
   let ws: { send: (d: string) => void, close: () => void, readyState: number } | null = null
@@ -57,6 +60,14 @@
   // UI state
   let showSidebar = true
   let showSettings = false
+  let settingsTab: 'general' | 'profile' | 'notifications' | 'security' = 'general'
+  let settingsProfile = { displayName: '', bio: '', avatarUrl: '', bannerUrl: '' }
+  let settingsProfileLoading = false
+  let settingsProfileError = ''
+  let settingsProfileDirty = false
+  let settingsProfileSaved = false
+  let uploadingAvatar = false
+  let uploadingBanner = false
   let isAppVisible = true
   let isSending = false
   let typingTimeout: any = null
@@ -109,6 +120,7 @@
   MessagesLib.messagesMap.subscribe(value => messagesMap = value)
   MessagesLib.unreadMap.subscribe(value => unreadMap = value)
   MessagesLib.typingMap.subscribe(value => typingMap = value)
+  MessagesLib.pinnedMap.subscribe(value => pinnedMap = value)
   
   ContactsLib.keys.subscribe(value => keys = value)
   ContactsLib.groups.subscribe(value => groups = value)
@@ -216,6 +228,47 @@
     notificationPermission = perm
   }
 
+  function applyProfileToSettingsForm(profile?: any) {
+    const target = profile ?? profiles[id]
+    settingsProfile = {
+      displayName: target?.displayName || '',
+      bio: target?.bio || '',
+      avatarUrl: target?.avatarUrl || '',
+      bannerUrl: target?.bannerUrl || ''
+    }
+  }
+
+  function markSettingsProfileDirty() {
+    settingsProfileDirty = true
+    settingsProfileSaved = false
+    settingsProfileError = ''
+  }
+
+  async function openSettings() {
+    settingsTab = 'general'
+    settingsProfileDirty = false
+    settingsProfileSaved = false
+    settingsProfileError = ''
+    showSettings = true
+
+    if (!id) return
+
+    if (profiles[id]) {
+      applyProfileToSettingsForm()
+      return
+    }
+
+    settingsProfileLoading = true
+    try {
+      await loadProfile(id)
+      if (!settingsProfileDirty) {
+        applyProfileToSettingsForm()
+      }
+    } finally {
+      settingsProfileLoading = false
+    }
+  }
+
   $: currentMessages = contact ? (messagesMap[contact] || []) : []
 
   $: if (contact) {
@@ -229,6 +282,11 @@
           }
         })
         .catch(err => console.warn('Failed to load cached messages:', err))
+    }
+    
+    // Load contact profile if not already loaded
+    if (contact && !contact.startsWith('#') && !profiles[contact]) {
+      loadProfile(contact)
     }
     
     // Send read receipts for unread messages from this contact
@@ -245,6 +303,10 @@
     unreadMap = { ...unreadMap, [contact]: 0 }
   }
 
+  $: if (showSettings && profiles[id] && !settingsProfileDirty) {
+    applyProfileToSettingsForm()
+  }
+
   function handleAuthSuccess(e: any) {
     const data = e.detail
     if (!data) return
@@ -256,6 +318,7 @@
     showSidebar = true
     connect()
     NotificationsLib.setupNotifications(id, sessionToken, API_URL)
+    loadProfile(id)
     saveSession()
   }
 
@@ -354,6 +417,18 @@
           }
           // Update cache
           MessageCacheLib.cacheMessage(chatWith, messagesMap[chatWith].find(m => m.messageId === msg.messageId)).catch(err => console.warn('Failed to cache read receipt:', err))
+        }
+        return
+      }
+
+      // Handle reactions
+      if (msg.type === 'react') {
+        const chatWith = msg.chatWith || msg.from
+        const messageId = msg.messageId
+        const emoji = msg.emoji
+        const reactor = msg.from
+        if (chatWith && messageId && emoji && reactor) {
+          applyReaction(chatWith, messageId, emoji, reactor)
         }
         return
       }
@@ -813,6 +888,46 @@
     }
   }
 
+  function applyReaction(chatId: string, messageId: string, emoji: string, userId: string) {
+    const list = messagesMap[chatId]
+    if (!list) return
+    messagesMap = {
+      ...messagesMap,
+      [chatId]: list.map(m => {
+        if (m.messageId !== messageId) return m
+        const reactions = { ...(m.reactions || {}) }
+        const set = new Set(reactions[emoji] || [])
+        if (set.has(userId)) {
+          set.delete(userId)
+        } else {
+          set.add(userId)
+        }
+        reactions[emoji] = Array.from(set)
+        return { ...m, reactions }
+      })
+    }
+  }
+
+  function handleReact(e: CustomEvent<{ messageId: string; emoji: string }>) {
+    if (!contact || !ws || ws.readyState !== WebSocket.OPEN) return
+    const { messageId, emoji } = e.detail
+    if (!messageId || !emoji) return
+
+    ws.send(JSON.stringify({
+      type: 'react',
+      to: contact,
+      messageId,
+      emoji
+    }))
+
+    applyReaction(contact, messageId, emoji, id)
+  }
+
+  function handleTogglePin(e: CustomEvent<{ messageId?: string }>) {
+    if (!contact || !e.detail.messageId) return
+    MessagesLib.togglePin(contact, e.detail.messageId)
+  }
+
   // VoIP Call Functions - using composable
   function sendVoipSignal(type: string, data: any, to: string) {
     if (ws) {
@@ -858,25 +973,13 @@
   }
   
   function endCall() {
-    const currentCallContact = callContact
+    // Centralize signaling in VoipLib
     VoipLib.endCall()
-    if (ws && currentCallContact) {
-      ws.send(JSON.stringify({
-        type: 'call-end',
-        to: currentCallContact
-      }))
-    }
   }
   
   function cancelCall() {
-    const currentCallContact = callContact
+    // Centralize signaling in VoipLib
     VoipLib.cancelCall()
-    if (ws && currentCallContact) {
-      ws.send(JSON.stringify({
-        type: 'call-cancel',
-        to: currentCallContact
-      }))
-    }
   }
   
   function toggleMute() {
@@ -1129,6 +1232,174 @@
     } catch (e) {}
   }
 
+  async function loadProfile(userId: string) {
+    if (!userId) return
+    profileLoading = true
+    profileError = ''
+    try {
+      const res = await fetch(`${API_URL}/profile?id=${encodeURIComponent(userId)}`)
+      if (res.ok) {
+        const data = await res.json()
+        profiles = { ...profiles, [userId]: data }
+      } else if (res.status === 404) {
+        profiles = { ...profiles, [userId]: null }
+      } else {
+        profileError = 'Failed to load profile'
+      }
+    } catch (e) {
+      profileError = 'Failed to load profile'
+    } finally {
+      profileLoading = false
+    }
+  }
+
+  async function saveProfile(e: CustomEvent<{ profile: any }>) {
+    const p = e.detail?.profile
+    if (!p || !sessionToken || p.id !== id) return
+    profileLoading = true
+    profileError = ''
+    try {
+      const res = await fetch(`${API_URL}/profile`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${sessionToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(p)
+      })
+      if (!res.ok) throw new Error('save failed')
+      profiles = { ...profiles, [id]: { ...p, updatedAt: Date.now() } }
+      contacts = contacts.map(c => c.id === id ? { ...c, name: p.displayName || c.name } : c)
+    } catch (err) {
+      profileError = 'Failed to save profile'
+    } finally {
+      profileLoading = false
+    }
+  }
+
+  async function uploadFile(file: File): Promise<string | null> {
+    if (!id || !sessionToken) return null
+
+    const formData = new FormData()
+    formData.append('file', file)
+
+    try {
+      const res = await fetch(`${API_URL}/cdn/upload`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${sessionToken}`,
+          'X-ByteChat-ID': id
+        },
+        body: formData
+      })
+
+      if (!res.ok) throw new Error('upload failed')
+
+      const data = await res.json()
+      return data.url
+    } catch (err) {
+      console.error('Upload failed:', err)
+      return null
+    }
+  }
+
+  async function handleAvatarUpload(e: Event) {
+    const input = e.target as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file) return
+
+    if (!file.type.startsWith('image/')) {
+      settingsProfileError = 'Please select an image file'
+      return
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      settingsProfileError = 'Avatar must be less than 5MB'
+      return
+    }
+
+    uploadingAvatar = true
+    settingsProfileError = ''
+
+    const url = await uploadFile(file)
+    if (url) {
+      settingsProfile.avatarUrl = url
+      markSettingsProfileDirty()
+    } else {
+      settingsProfileError = 'Failed to upload avatar'
+    }
+
+    uploadingAvatar = false
+    input.value = ''
+  }
+
+  async function handleBannerUpload(e: Event) {
+    const input = e.target as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file) return
+
+    if (!file.type.startsWith('image/')) {
+      settingsProfileError = 'Please select an image file'
+      return
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      settingsProfileError = 'Banner must be less than 10MB'
+      return
+    }
+
+    uploadingBanner = true
+    settingsProfileError = ''
+
+    const url = await uploadFile(file)
+    if (url) {
+      settingsProfile.bannerUrl = url
+      markSettingsProfileDirty()
+    } else {
+      settingsProfileError = 'Failed to upload banner'
+    }
+
+    uploadingBanner = false
+    input.value = ''
+  }
+
+  async function saveSettingsProfile() {
+    if (!id || !sessionToken) return
+    settingsProfileLoading = true
+    settingsProfileError = ''
+    settingsProfileSaved = false
+
+    const payload = {
+      id,
+      displayName: settingsProfile.displayName?.trim() || '',
+      bio: settingsProfile.bio?.trim() || '',
+      avatarUrl: settingsProfile.avatarUrl?.trim() || '',
+      bannerUrl: settingsProfile.bannerUrl?.trim() || ''
+    }
+
+    try {
+      const res = await fetch(`${API_URL}/profile`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${sessionToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      })
+
+      if (!res.ok) throw new Error('save failed')
+
+      profiles = { ...profiles, [id]: { ...payload, updatedAt: Date.now() } }
+      contacts = contacts.map(c => c.id === id ? { ...c, name: payload.displayName || c.name } : c)
+      settingsProfileDirty = false
+      settingsProfileSaved = true
+    } catch (err) {
+      settingsProfileError = 'Failed to save profile'
+    } finally {
+      settingsProfileLoading = false
+    }
+  }
+
   async function createGroup(name: string, members: string[]) {
     if (!id || !sessionToken) return
     const gid = '#' + Math.random().toString(36).slice(2, 10)
@@ -1153,9 +1424,6 @@
   onMount(()=>{
     // Initialize message cache
     MessageCacheLib.initializeCache().catch(err => console.warn('Failed to initialize message cache:', err))
-    
-    // Initialize Vercel Analytics and Speed Insights
-    inject()
     
     // Show loading screen and request permissions (async, non-blocking)
     initializeApp()
@@ -1201,6 +1469,7 @@
             isLoggedIn = true
             connect()
             NotificationsLib.setupNotifications(id, sessionToken, API_URL)
+            loadProfile(id)
             // Validate session after a delay to allow WebSocket to connect first
             setTimeout(() => validateSession(), 2000)
           }
@@ -1223,6 +1492,7 @@
                 isLoggedIn = true
                 connect()
                 NotificationsLib.setupNotifications(id, sessionToken, API_URL)
+                loadProfile(id)
                 setTimeout(() => validateSession(), 2000)
                 console.log('Restored from backup')
               }
@@ -1532,6 +1802,160 @@
     gap: 0.5rem;
   }
 
+  .settings-tabs {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.5rem;
+    background: var(--bg);
+    border: 1px solid var(--surface-lighter);
+    border-radius: 12px;
+    padding: 0.35rem;
+  }
+
+  .settings-tab {
+    border: none;
+    background: transparent;
+    color: var(--subtext);
+    padding: 0.65rem 0.75rem;
+    border-radius: 10px;
+    cursor: pointer;
+    font-weight: 700;
+    transition: all 0.15s ease;
+  }
+
+  .settings-tab:hover {
+    background: var(--surface-lighter);
+    color: var(--fg);
+  }
+
+  .settings-tab.active {
+    background: var(--accent);
+    color: var(--accent-fg);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+  }
+
+  .profile-card {
+    gap: 1rem;
+  }
+
+  .profile-visuals {
+    position: relative;
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .profile-banner {
+    height: 120px;
+    border-radius: 10px;
+    background-size: cover;
+    background-position: center;
+  }
+
+  .profile-avatar {
+    width: 72px;
+    height: 72px;
+    border-radius: 16px;
+    background: var(--surface-lighter);
+    color: var(--accent);
+    display: grid;
+    place-items: center;
+    font-weight: 800;
+    position: absolute;
+    left: 12px;
+    bottom: -20px;
+    border: 3px solid var(--surface);
+    overflow: hidden;
+  }
+
+  .profile-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .profile-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-top: 1.25rem;
+  }
+
+  .settings-sub-label {
+    font-size: 0.8rem;
+    color: var(--subtext);
+    font-weight: 700;
+  }
+
+  .settings-input,
+  .settings-textarea {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--surface-lighter);
+    color: var(--fg);
+    border-radius: 10px;
+    padding: 0.75rem;
+    font-size: 0.95rem;
+  }
+
+  .settings-textarea {
+    resize: vertical;
+    min-height: 96px;
+  }
+
+  .settings-input:disabled,
+  .settings-textarea:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+
+  .settings-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .settings-error {
+    color: var(--red);
+    font-weight: 700;
+  }
+
+  .settings-success {
+    color: var(--green);
+    font-weight: 700;
+    text-align: center;
+  }
+
+  .upload-group {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  .upload-group .settings-input {
+    flex: 1;
+  }
+
+  .upload-btn {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border: none;
+    border-radius: 10px;
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    font-size: 1.2rem;
+    transition: opacity 0.2s;
+    flex-shrink: 0;
+  }
+
+  .upload-btn:hover:not(:disabled) {
+    opacity: 0.85;
+  }
+
+  .upload-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
   @media (max-width: 768px) {
 
     .sidebar-wrapper {
@@ -1583,18 +2007,22 @@
           {latestVersion}
           {isUpdating}
           {onlineUsers}
+          userProfile={profiles[id]}
+          userId={id}
+            {profiles}
           selected={contact} 
           on:select={(e)=>{ contact = e.detail.id; showSidebar = false; }} 
           on:openProfile={(e) => {
             selectedUser = e.detail.userId
             selectedUserOnline = onlineUsers.has(e.detail.userId)
             selectedUserCommonGroups = groups.filter(g => g.members.includes(e.detail.userId))
+            loadProfile(e.detail.userId)
             showUserProfile = true
           }}
           on:addContact={(e) => addContact(e.detail.id)} 
           on:createGroup={(e) => createGroup(e.detail.name, e.detail.members)}
           on:logout={logout}
-          on:openSettings={() => showSettings = true} 
+          on:openSettings={openSettings} 
           on:update={installUpdate}
         />
       </div>
@@ -1603,7 +2031,8 @@
           <ChatWindow 
             currentUserId={id} 
             contactId={contact}
-            contactName={contacts.find(c => c.id === contact)?.name}
+            contactName={profiles[contact]?.displayName || contacts.find(c => c.id === contact)?.name}
+            contactProfile={profiles[contact]}
             messages={currentMessages} 
             isTyping={contact ? !!typingMap[contact] : false}
             isSending={isSending}
@@ -1612,10 +2041,13 @@
             isOnline={contact ? onlineUsers.has(contact) : false}
             isGroup={contact?.startsWith('#') || false}
             group={selectedGroup}
+            pinned={pinnedMap[contact] || []}
             on:send={(e)=>sendTo(e.detail.to, e.detail.text, e.detail.replyTo)} 
             on:sendFile={(e)=>sendFile(e.detail.to, e.detail.fileData, e.detail.fileName, e.detail.fileType)}
             on:edit={handleEdit}
             on:delete={handleDelete}
+            on:react={handleReact}
+            on:togglePin={handleTogglePin}
             on:typing={handleTyping}
             on:startCall={startCall}
             on:endCall={endCall}
@@ -1649,58 +2081,184 @@
             </button>
           </header>
 
-          <div class="settings-section">
-            <span class="settings-label">Account</span>
-            <div class="settings-item">
-              <div class="flex justify-between items-center">
-                <span class="opacity-50 text-sm">Logged in as</span>
-                <span class="font-bold text-accent">{id}</span>
-              </div>
-              <div class="flex justify-between items-center mt-2">
-                <span class="opacity-50 text-sm">Status</span>
-                <div class="status-indicator">
-                  <div class="dot {wsStatus}"></div>
-                  <span class="opacity-50">{wsStatus}</span>
+          <div class="settings-tabs" role="tablist">
+            <button class="settings-tab" class:active={settingsTab === 'general'} on:click={() => settingsTab = 'general'} role="tab">General</button>
+            <button class="settings-tab" class:active={settingsTab === 'profile'} on:click={() => settingsTab = 'profile'} role="tab">Profile</button>
+            <button class="settings-tab" class:active={settingsTab === 'notifications'} on:click={() => settingsTab = 'notifications'} role="tab">Notifications</button>
+            <button class="settings-tab" class:active={settingsTab === 'security'} on:click={() => settingsTab = 'security'} role="tab">Security</button>
+          </div>
+
+          {#if settingsTab === 'general'}
+            <div class="settings-section">
+              <span class="settings-label">Account</span>
+              <div class="settings-item">
+                <div class="flex justify-between items-center">
+                  <span class="opacity-50 text-sm">Logged in as</span>
+                  <span class="font-bold text-accent">{id}</span>
+                </div>
+                <div class="flex justify-between items-center mt-2">
+                  <span class="opacity-50 text-sm">Status</span>
+                  <div class="status-indicator">
+                    <div class="dot {wsStatus}"></div>
+                    <span class="opacity-50">{wsStatus}</span>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
 
-          <div class="settings-section">
-            <span class="settings-label">Notifications</span>
-            <div class="settings-item">
-              <div class="flex justify-between items-center">
-                <span class="text-sm">Push Notifications</span>
-                {#if notificationPermission === 'granted'}
-                  <span class="text-green text-xs font-bold uppercase">Enabled</span>
-                {:else}
-                  <button class="btn-secondary text-xs py-1 px-3 rounded-lg" on:click={requestNotificationPermission}>Enable</button>
+            <div class="settings-section">
+              <span class="settings-label">API</span>
+              <div class="settings-item">
+                <div class="flex justify-between items-start gap-4">
+                  <span class="opacity-50 text-sm">VITE_API_URL</span>
+                  <span class="font-mono text-xs break-all text-right">{API_URL}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-auto pt-2 text-center opacity-30 text-[10px] font-mono">
+              ByteChat v{version}
+            </div>
+          {:else if settingsTab === 'profile'}
+            <div class="settings-section">
+              <span class="settings-label">Profile</span>
+              {#if settingsProfileLoading || profileLoading}
+                <div class="settings-item">Loading profile...</div>
+              {:else}
+                <div class="settings-item profile-card">
+                  <div class="profile-visuals">
+                    <div class="profile-banner" style={`background-image: ${settingsProfile.bannerUrl ? `url(${settingsProfile.bannerUrl})` : 'linear-gradient(135deg, var(--surface-lighter), var(--surface-darker))'}`}></div>
+                    <div class="profile-avatar">
+                      {#if settingsProfile.avatarUrl}
+                        <img src={settingsProfile.avatarUrl} alt="avatar preview" />
+                      {:else}
+                        {(id || '?').slice(0, 1).toUpperCase()}
+                      {/if}
+                    </div>
+                  </div>
+                  <div class="profile-fields">
+                    <label class="settings-sub-label">Display name</label>
+                    <input
+                      class="settings-input"
+                      placeholder="Add a display name"
+                      bind:value={settingsProfile.displayName}
+                      disabled={settingsProfileLoading}
+                      on:input={markSettingsProfileDirty}
+                    />
+
+                    <label class="settings-sub-label">Bio</label>
+                    <textarea
+                      class="settings-textarea"
+                      rows="3"
+                      placeholder="Tell people about you"
+                      bind:value={settingsProfile.bio}
+                      disabled={settingsProfileLoading}
+                      on:input={markSettingsProfileDirty}
+                    ></textarea>
+
+                    <label class="settings-sub-label">Avatar</label>
+                    <div class="upload-group">
+                      <input
+                        class="settings-input"
+                        placeholder="https://... or upload"
+                        bind:value={settingsProfile.avatarUrl}
+                        disabled={settingsProfileLoading}
+                        on:input={markSettingsProfileDirty}
+                      />
+                      <input
+                        type="file"
+                        accept="image/*"
+                        style="display: none;"
+                        on:change={handleAvatarUpload}
+                        id="avatar-upload"
+                      />
+                      <button
+                        class="upload-btn"
+                        on:click={() => document.getElementById('avatar-upload')?.click()}
+                        disabled={uploadingAvatar || settingsProfileLoading}
+                      >
+                        {uploadingAvatar ? '⏳' : '📤'}
+                      </button>
+                    </div>
+
+                    <label class="settings-sub-label">Banner</label>
+                    <div class="upload-group">
+                      <input
+                        class="settings-input"
+                        placeholder="https://... or upload"
+                        bind:value={settingsProfile.bannerUrl}
+                        disabled={settingsProfileLoading}
+                        on:input={markSettingsProfileDirty}
+                      />
+                      <input
+                        type="file"
+                        accept="image/*"
+                        style="display: none;"
+                        on:change={handleBannerUpload}
+                        id="banner-upload"
+                      />
+                      <button
+                        class="upload-btn"
+                        on:click={() => document.getElementById('banner-upload')?.click()}
+                        disabled={uploadingBanner || settingsProfileLoading}
+                      >
+                        {uploadingBanner ? '⏳' : '📤'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              {/if}
+
+              {#if settingsProfileError}
+                <div class="settings-error">{settingsProfileError}</div>
+              {/if}
+
+              <div class="settings-actions">
+                <button
+                  class="btn-secondary w-full py-3 rounded-xl"
+                  on:click={saveSettingsProfile}
+                  disabled={settingsProfileLoading || !settingsProfileDirty}
+                >
+                  {settingsProfileLoading ? 'Saving...' : settingsProfileDirty ? 'Save profile' : 'Saved'}
+                </button>
+                {#if settingsProfileSaved && !settingsProfileDirty}
+                  <span class="settings-success">Profile saved</span>
                 {/if}
               </div>
             </div>
-          </div>
-
-          <div class="settings-section">
-            <span class="settings-label">Data & Security</span>
-            <div class="flex flex-col gap-2">
-              <button class="btn-secondary w-full py-3 rounded-xl flex items-center justify-center gap-2" on:click={exportKeys}>
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-                </svg>
-                Export Keys
-              </button>
-              <button class="btn-secondary w-full py-3 rounded-xl text-red flex items-center justify-center gap-2" on:click={logout}>
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
-                </svg>
-                Logout
-              </button>
+          {:else if settingsTab === 'notifications'}
+            <div class="settings-section">
+              <span class="settings-label">Notifications</span>
+              <div class="settings-item">
+                <div class="flex justify-between items-center">
+                  <span class="text-sm">Push Notifications</span>
+                  {#if notificationPermission === 'granted'}
+                    <span class="text-green text-xs font-bold uppercase">Enabled</span>
+                  {:else}
+                    <button class="btn-secondary text-xs py-1 px-3 rounded-lg" on:click={requestNotificationPermission}>Enable</button>
+                  {/if}
+                </div>
+              </div>
             </div>
-          </div>
-
-          <div class="mt-auto pt-4 text-center opacity-30 text-[10px] font-mono">
-            ByteChat v{version}
-          </div>
+          {:else if settingsTab === 'security'}
+            <div class="settings-section">
+              <span class="settings-label">Data & Security</span>
+              <div class="flex flex-col gap-2">
+                <button class="btn-secondary w-full py-3 rounded-xl flex items-center justify-center gap-2" on:click={exportKeys}>
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+                  </svg>
+                  Export Keys
+                </button>
+                <button class="btn-secondary w-full py-3 rounded-xl text-red flex items-center justify-center gap-2" on:click={logout}>
+                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
+                  </svg>
+                  Logout
+                </button>
+              </div>
+            </div>
+          {/if}
         </div>
       </div>
     {/if}
@@ -1717,10 +2275,15 @@
     {#if showUserProfile && selectedUser}
       <UserProfile
         userId={selectedUser}
-        userNickname={contacts.find(c => c.id === selectedUser)?.name || ''}
+        userNickname={profiles[selectedUser]?.displayName || contacts.find(c => c.id === selectedUser)?.name || ''}
+        profile={profiles[selectedUser]}
+        loading={profileLoading}
+        error={profileError}
+        isSelf={selectedUser === id}
         isOpen={showUserProfile}
         isOnline={selectedUserOnline}
         commonGroups={selectedUserCommonGroups}
+        on:saveProfile={saveProfile}
         on:startChat={() => { contact = selectedUser; showUserProfile = false }}
         on:addToContacts={(e) => { addContact(e.detail.userId, e.detail.name); showUserProfile = false }}
         on:removeFromContacts={(e) => { contacts = contacts.filter(c => c.id !== e.detail.userId); showUserProfile = false }}

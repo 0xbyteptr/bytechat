@@ -123,6 +123,12 @@ export function endCall(): void {
     voipCallInstance.hangup()
   }
   
+  // Notify remote party that the call ended
+  const remoteContact = getCurrentCallContact()
+  if (remoteContact && sendSignalCallback) {
+    sendSignalCallback('call-end', {}, remoteContact)
+  }
+
   // Log call duration if call was connected
   const currentState = getCurrentCallState()
   const currentContact = getCurrentCallContact()

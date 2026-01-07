@@ -9,7 +9,10 @@
   export let isNewerThanRelease = false
   export let latestVersion = ''
   export let onlineUsers: Set<string> = new Set()
-  
+  export let userProfile: { displayName?: string; avatarUrl?: string; bannerUrl?: string; bio?: string; z?: string } | null = null
+  export let userId = ''
+  export let profiles: Record<string, { displayName?: string; avatarUrl?: string; bannerUrl?: string; bio?: string }> = {}
+
   $: if (onlineUsers && onlineUsers.size >= 0) {
     console.log('Sidebar received onlineUsers:', Array.from(onlineUsers))
   }
@@ -42,9 +45,23 @@
 </script>
 
 <aside class="sidebar">
-  <div class="sidebar-header">
+  <div class="sidebar-header" style={userProfile?.bannerUrl ? `background-image: linear-gradient(to bottom, rgba(0,0,0,0.6), var(--surface)), url(${userProfile.bannerUrl}); background-size: cover; background-position: center;` : ''}>
     <div class="flex items-center justify-between mb-4">
-      <h2 class="brand">Messages</h2>
+      <div class="flex items-center gap-3">
+        <div class="user-avatar" on:click={() => dispatch('openSettings')} on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') dispatch('openSettings') }} role="button" tabindex="0" title="Open Settings">
+          {#if userProfile?.avatarUrl}
+            <img src={userProfile.avatarUrl} alt="Your avatar" />
+          {:else}
+            {(userId || '?').slice(0, 1).toUpperCase()}
+          {/if}
+        </div>
+        <div class="user-info">
+          <h2 class="brand">{userProfile?.displayName || 'Messages'}</h2>
+          {#if userProfile?.z}
+            <p class="user-bio">{userProfile.bio}</p>
+          {/if}
+        </div>
+      </div>
       <div class="flex items-center gap-1">
         <button class="settings-btn" on:click={() => dispatch('logout')} title="Logout">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -140,17 +157,28 @@
         <button 
           class="contact-item" 
           class:active={c.id === selected}
+          class:has-banner={Boolean(profiles[c.id]?.bannerUrl)}
+          class:has-banner-active={Boolean(profiles[c.id]?.bannerUrl) && c.id === selected}
+          style={profiles[c.id]?.bannerUrl 
+            ? `background-image: linear-gradient(90deg, rgba(0,0,0,0.35), rgba(0,0,0,0.15)), url(${profiles[c.id].bannerUrl}); background-size: cover; background-position: center;` 
+            : ''}
           on:click={() => pick(c.id)}
         >
           <div class="avatar-wrapper" on:click|stopPropagation={() => openProfile(c.id)} on:keydown|stopPropagation={(e) => { if (e.key === 'Enter' || e.key === ' ') openProfile(c.id) }} role="button" tabindex="0">
-            <div class="avatar">{(c.name || c.id).slice(0,1).toUpperCase()}</div>
+              <div class="avatar">
+                {#if profiles[c.id]?.avatarUrl}
+                  <img src={profiles[c.id].avatarUrl} alt={profiles[c.id]?.displayName || c.id} />
+                {:else}
+                  {(profiles[c.id]?.displayName || c.name || c.id).slice(0,1).toUpperCase()}
+                {/if}
+              </div>
             {#if onlineUsers.has(c.id)}
               <div class="online-indicator" title="Online"></div>
             {/if}
           </div>
           <div class="contact-info">
             <div class="contact-top">
-              <span class="contact-name">{c.name || c.id}</span>
+              <span class="contact-name">{profiles[c.id]?.displayName || c.name || c.id}</span>
               {#if c.unread}
                 <span class="unread-badge">{c.unread}</span>
               {/if}
@@ -193,6 +221,53 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
+    position: relative;
+    transition: background 0.3s ease;
+  }
+
+  .user-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    background: var(--accent);
+    color: var(--accent-fg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 1.1rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .user-avatar:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+  }
+
+  .user-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .user-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .user-bio {
+    font-size: 0.75rem;
+    color: var(--subtext);
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .update-banner {
@@ -371,9 +446,33 @@
     background: var(--surface-lighter);
   }
 
-  .contact-item.active {
+  .contact-item.active:not(.has-banner) {
     background: var(--accent);
     color: var(--accent-fg);
+  }
+
+  /* Preserve banner image on hover and improve legibility */
+  .contact-item.has-banner:hover {
+    background: none;
+  }
+  .contact-item.has-banner {
+    color: white;
+    text-shadow: 0 1px 1px rgba(0,0,0,0.25);
+  }
+  .contact-item.has-banner-active {
+    box-shadow: 0 0 0 2px var(--accent) inset;
+  }
+  .contact-item.has-banner .contact-last {
+    color: rgba(255,255,255,0.85);
+  }
+  .contact-item.has-banner .avatar {
+    background: rgba(0,0,0,0.25);
+    border-color: rgba(255,255,255,0.35);
+    color: white;
+  }
+  .contact-item.has-banner-active .avatar {
+    background: rgba(0,0,0,0.35);
+    border-color: rgba(255,255,255,0.5);
   }
 
   .avatar {
@@ -388,6 +487,13 @@
     font-weight: 800;
     color: var(--accent);
     flex-shrink: 0;
+      overflow: hidden;
+    }
+
+    .avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
   }
 
   .avatar-wrapper {

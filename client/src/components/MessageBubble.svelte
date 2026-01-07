@@ -18,8 +18,12 @@
       status: 'missed' | 'completed' | 'cancelled' | 'declined';
       initiator: string;
     };
+    reactions?: Record<string, string[]>;
+    failedDecrypt?: boolean;
   }
   export let isOwn = false
+  export let isPinned = false
+  export let currentUserId = ''
   
   const dispatch = createEventDispatcher()
   let showActions = false
@@ -58,10 +62,28 @@
     dispatch('reply', msg)
     showActions = false
   }
+
+  function handleTogglePin() {
+    if (!msg.messageId) return
+    dispatch('togglePin', { messageId: msg.messageId })
+    showActions = false
+  }
+
+  function handleReaction(emoji: string) {
+    if (!msg.messageId) return
+    dispatch('react', { messageId: msg.messageId, emoji })
+    showActions = false
+  }
+
+  const defaultReactions = ['👍','❤️','😂','😮','😢']
 </script>
 
 <div class="message-row" class:is-own={isOwn}>
   <div class="bubble" role="button" tabindex="0" on:contextmenu|preventDefault={() => showActions = !showActions}>
+    {#if isPinned}
+      <div class="pin-tag">📌 Pinned</div>
+    {/if}
+
     {#if msg.replyTo}
       <div class="reply-preview">
         <div class="reply-line"></div>
@@ -72,7 +94,9 @@
       </div>
     {/if}
     
-    {#if msg.deleted}
+    {#if msg.failedDecrypt}
+      <div class="failed-decrypt">Could not decrypt this message</div>
+    {:else if msg.deleted}
       <div class="deleted-message">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
           <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/>
@@ -137,12 +161,31 @@
             Delete
           </button>
         {/if}
+        <button class="action-btn" on:click={handleTogglePin}>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <path d="M14 2l1 1-2.5 4.5 4 3L17 12l-2.5 1.5v6l-1 .5-1-.5v-6L10 12l.5-1.5 4-3L12 3l1-1z"/>
+          </svg>
+          {isPinned ? 'Unpin' : 'Pin'}
+        </button>
         <button class="action-btn" on:click={handleReply}>
           <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
             <path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z"/>
           </svg>
           Reply
         </button>
+        <div class="reaction-row">
+          {#each defaultReactions as emoji}
+            <button class="reaction-btn" on:click={() => handleReaction(emoji)}>{emoji}</button>
+          {/each}
+        </div>
+      </div>
+    {/if}
+
+    {#if msg.reactions}
+      <div class="reactions">
+        {#each Object.entries(msg.reactions) as [emoji, users]}
+          <span class:own-reacted={users && users.includes(currentUserId)}>{emoji} {users?.length || 0}</span>
+        {/each}
       </div>
     {/if}
   </div>
@@ -184,6 +227,15 @@
     background: var(--accent);
     color: var(--accent-fg);
     border-bottom-right-radius: 4px;
+  }
+
+  .pin-tag {
+    font-size: 0.7rem;
+    opacity: 0.7;
+    margin-bottom: 0.25rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
   }
   
   .reply-preview {
@@ -229,6 +281,16 @@
     gap: 0.4rem;
     font-style: italic;
     opacity: 0.6;
+  }
+
+  .failed-decrypt {
+    color: var(--fg);
+    background: rgba(255, 184, 108, 0.15);
+    border: 1px solid rgba(255, 184, 108, 0.3);
+    padding: 0.4rem 0.6rem;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    margin-bottom: 0.25rem;
   }
   
   .call-message {
@@ -289,6 +351,43 @@
   
   .action-btn:hover {
     background: var(--surface-lighter);
+  }
+
+  .reaction-row {
+    display: flex;
+    gap: 0.25rem;
+    margin-left: 0.35rem;
+  }
+
+  .reaction-btn {
+    background: none;
+    border: 1px solid var(--surface-lighter);
+    border-radius: 6px;
+    padding: 0.2rem 0.4rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+
+  .reactions {
+    display: flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+    margin-top: 0.35rem;
+    font-size: 0.85rem;
+  }
+
+  .reactions span {
+    background: rgba(0,0,0,0.08);
+    padding: 0.2rem 0.4rem;
+    border-radius: 12px;
+  }
+
+  .message-row.is-own .reactions span {
+    background: rgba(255,255,255,0.2);
+  }
+
+  .own-reacted {
+    outline: 1px solid var(--accent);
   }
   
   .deleted-message {

@@ -7,6 +7,10 @@
   export let commonGroups: any[] = []
   export let isBlocked = false
   export let userNickname: string = ''
+  export let profile: { displayName?: string; bio?: string; avatarUrl?: string; bannerUrl?: string } | null = null
+  export let loading = false
+  export let error = ''
+  export let isSelf = false
 
   const dispatch = createEventDispatcher()
   let activeTab: 'info' | 'groups' | 'actions' = 'info'
@@ -15,6 +19,11 @@
   let nickname = userNickname
   let editingNickname = false
   let nicknameUpdated = false
+  let displayName = ''
+  let bio = ''
+  let avatarUrl = ''
+  let bannerUrl = ''
+  let editingProfile = false
 
   function startChat() {
     dispatch('startChat', { userId })
@@ -66,6 +75,20 @@
     editingNickname = false
   }
 
+  function saveProfileDetails() {
+    if (!userId) return
+    dispatch('saveProfile', {
+      profile: {
+        id: userId,
+        displayName,
+        bio,
+        avatarUrl,
+        bannerUrl
+      }
+    })
+    editingProfile = false
+  }
+
   function shareProfile() {
     const shareText = `Check out this user on ByteChat: ${userId}`
     if (navigator.share) {
@@ -94,6 +117,13 @@
   }
 
   const avatar = userId?.slice(0, 1).toUpperCase() || '?'
+
+  $: if (profile && !editingProfile) {
+    displayName = profile.displayName || ''
+    bio = profile.bio || ''
+    avatarUrl = profile.avatarUrl || ''
+    bannerUrl = profile.bannerUrl || ''
+  }
 </script>
 
 <svelte:window on:keydown={handleKeydown} />
@@ -103,9 +133,16 @@
     <button class="modal-overlay" on:click={closeModal} type="button"></button>
 
     <div class="modal-content">
+      <div class="banner" style={`background-image: ${bannerUrl ? `url(${bannerUrl})` : 'none'}`}></div>
       <div class="modal-header">
         <div class="header-title">
-          <div class="avatar">{avatar}</div>
+          <div class="avatar">
+            {#if avatarUrl}
+              <img src={avatarUrl} alt="avatar" class="avatar-img" />
+            {:else}
+              {avatar}
+            {/if}
+          </div>
           <div class="title-text">
             {#if editingNickname}
               <div class="nickname-edit">
@@ -165,6 +202,61 @@
                   {isOnline ? '🟢 Online' : '⚫ Offline'}
                 </div>
               </div>
+
+              <div class="info-item">
+                <span class="label">Display name</span>
+                <input
+                  class="text-input"
+                  placeholder="Add a display name"
+                  bind:value={displayName}
+                  disabled={!isSelf || loading}
+                  on:input={() => editingProfile = true}
+                />
+              </div>
+
+              <div class="info-item">
+                <span class="label">Bio</span>
+                <textarea
+                  class="text-input"
+                  rows="3"
+                  placeholder="Tell people about you"
+                  bind:value={bio}
+                  disabled={!isSelf || loading}
+                  on:input={() => editingProfile = true}
+                ></textarea>
+              </div>
+
+              <div class="info-item">
+                <span class="label">Avatar URL</span>
+                <input
+                  class="text-input"
+                  placeholder="https://..."
+                  bind:value={avatarUrl}
+                  disabled={!isSelf || loading}
+                  on:input={() => editingProfile = true}
+                />
+              </div>
+
+              <div class="info-item">
+                <span class="label">Banner URL</span>
+                <input
+                  class="text-input"
+                  placeholder="https://..."
+                  bind:value={bannerUrl}
+                  disabled={!isSelf || loading}
+                  on:input={() => editingProfile = true}
+                />
+              </div>
+
+              {#if error}
+                <div class="error-text">{error}</div>
+              {/if}
+
+              {#if isSelf}
+                <button class="action-btn primary" on:click={saveProfileDetails} disabled={loading}>
+                  {loading ? 'Saving...' : 'Save profile'}
+                </button>
+              {/if}
 
               {#if isBlocked}
                 <div class="info-item warning">
@@ -313,6 +405,14 @@
     border-bottom: 1px solid var(--surface-lighter);
   }
 
+  .banner {
+    height: 140px;
+    background: linear-gradient(135deg, var(--surface-lighter), var(--surface-darker));
+    background-size: cover;
+    background-position: center;
+    border-radius: 12px 12px 0 0;
+  }
+
   .header-title {
     display: flex;
     align-items: center;
@@ -334,6 +434,13 @@
     flex-shrink: 0;
   }
 
+
+  .avatar-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 12px;
+  }
   .title-text {
     flex: 1;
     min-width: 0;
@@ -535,6 +642,21 @@
     border-radius: 6px;
   }
 
+  .text-input {
+    width: 100%;
+    padding: 0.65rem 0.75rem;
+    background: var(--surface);
+    color: var(--fg);
+    border: 1px solid var(--surface-lighter);
+    border-radius: 6px;
+    font-size: 0.95rem;
+  }
+
+  .text-input:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+
   .info-item.warning {
     border-left: 3px solid #fbbf24;
   }
@@ -587,6 +709,11 @@
   .status-badge.online {
     background: rgba(34, 197, 94, 0.1);
     color: var(--green);
+  }
+
+  .error-text {
+    color: #ef4444;
+    font-weight: 600;
   }
 
   .blocked-badge {

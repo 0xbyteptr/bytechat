@@ -1,9 +1,10 @@
 <script lang="ts">
   import MessageBubble from './MessageBubble.svelte'
-  import { createEventDispatcher, onMount, afterUpdate, tick } from 'svelte'
+  import { createEventDispatcher, afterUpdate, tick } from 'svelte'
   export let currentUserId: string
   export let contactId: string | null = null
   export let contactName: string | null = null
+  export let contactProfile: { displayName?: string; avatarUrl?: string; bannerUrl?: string } | null = null
   export let isSending = false
   export let callState: 'idle' | 'calling' | 'ringing' | 'connecting' | 'connected' | 'ended' = 'idle'
   export let isMuted = false
@@ -20,9 +21,20 @@
     editedAt?: number;
     deleted?: boolean;
     replyTo?: { messageId: string; text: string; from: string };
+    reactions?: Record<string, string[]>;
+    failedDecrypt?: boolean;
+    read?: boolean;
+    readAt?: number;
+    type?: 'text' | 'call';
+    callData?: {
+      duration?: number;
+      status: 'missed' | 'completed' | 'cancelled' | 'declined';
+      initiator: string;
+    };
   }
   export let messages: Array<Message> = []
   export let isTyping = false
+  export let pinned: string[] = []
   const dispatch = createEventDispatcher()
   const MAX_FILE_SIZE = parseInt(import.meta.env.VITE_MAX_FILE_SIZE || '52428800')
   let draft = ''
@@ -36,6 +48,15 @@
   let replyingTo: Message | null = null
   let shouldAutoScroll = true
   let prevMessageCount = 0
+  let searchTerm = ''
+
+  $: filteredMessages = searchTerm
+    ? messages.filter(m => (m.text || '').toLowerCase().includes(searchTerm.toLowerCase()))
+    : messages
+
+  $: pinnedMessages = pinned
+    .map(id => messages.find(m => m.messageId === id))
+    .filter((m): m is Message => Boolean(m && m.messageId))
   
   // Virtual scrolling for performance
   const ITEM_HEIGHT = 60 // Approximate height of message bubble
@@ -45,21 +66,24 @@
   let visibleStart = 0
   let visibleEnd = 0
   let totalHeight = 0
-  
+
   $: {
-    if (messages.length > 100) {
-      totalHeight = messages.length * ITEM_HEIGHT
+    const list = filteredMessages
+    if (list.length > 100) {
+      totalHeight = list.length * ITEM_HEIGHT
       viewportHeight = listEl?.clientHeight || 600
       visibleStart = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - BUFFER_SIZE)
-      visibleEnd = Math.min(messages.length, Math.ceil((scrollTop + viewportHeight) / ITEM_HEIGHT) + BUFFER_SIZE)
+      visibleEnd = Math.min(list.length, Math.ceil((scrollTop + viewportHeight) / ITEM_HEIGHT) + BUFFER_SIZE)
     } else {
       visibleStart = 0
-      visibleEnd = messages.length
+      visibleEnd = list.length
       totalHeight = 0
     }
   }
-  
-  $: visibleMessages = messages.length > 100 ? messages.slice(visibleStart, visibleEnd) : messages
+
+  $: visibleMessages = filteredMessages.length > 100
+    ? filteredMessages.slice(visibleStart, visibleEnd)
+    : filteredMessages
   $: offsetY = visibleStart * ITEM_HEIGHT
 
   afterUpdate(async () => {
@@ -127,6 +151,37 @@
   function cancelReply() {
     replyingTo = null
   }
+
+  async function scrollToMessage(id?: string) {
+    if (!id || !listEl) return
+    let targetList = filteredMessages
+    let index = targetList.findIndex(m => m.messageId === id)
+
+    if (index === -1) {
+      const allIndex = messages.findIndex(m => m.messageId === id)
+      if (allIndex === -1) return
+      if (searchTerm) {
+        searchTerm = ''
+        await tick()
+      }
+      targetList = filteredMessages
+      index = targetList.findIndex(m => m.messageId === id)
+    }
+
+    if (index >= 0 && targetList.length > 100) {
+      listEl.scrollTo({ top: index * ITEM_HEIGHT, behavior: 'smooth' })
+      requestAnimationFrame(() => {
+        const target = listEl?.querySelector(`[data-message-id="${id}"]`) as HTMLElement | null
+        target?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      })
+      return
+    }
+
+    const node = listEl.querySelector(`[data-message-id="${id}"]`) as HTMLElement | null
+    if (node) {
+      node.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  }
   
   function handleFile(e: Event) {
     const file = (e.target as HTMLInputElement).files?.[0]
@@ -175,7 +230,7 @@
   
   function handleScroll(e: Event) {
     const target = e.target as HTMLElement
-    if (messages.length > 100) {
+    if (filteredMessages.length > 100) {
       scrollTop = target.scrollTop
     }
     // Check if user is near bottom (within 100px)
@@ -213,17 +268,33 @@
   function toggleMute() {
     dispatch('toggleMute')
   }
+
+  function handleReact(event: CustomEvent<{ messageId: string; emoji: string }>) {
+    if (!contactId) return
+    dispatch('react', { to: contactId, ...event.detail })
+  }
+
+  function handleTogglePin(messageId?: string) {
+    if (!contactId || !messageId) return
+    dispatch('togglePin', { to: contactId, messageId })
+  }
 </script>
 
 <div class="chat-window">
   {#if contactId}
-    <header class="chat-header">
+    <header class="chat-header" style={contactProfile?.bannerUrl ? `background-image: linear-gradient(to bottom, rgba(0,0,0,0.6), var(--surface)), url(${contactProfile.bannerUrl}); background-size: cover; background-position: center;` : ''}>
       <button class="back-button" on:click={() => dispatch('back')}>
         <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.5">
           <path d="M19 12H5M12 19l-7-7 7-7" />
         </svg>
       </button>
-      <div class="avatar">{(contactName || contactId).slice(0,1).toUpperCase()}</div>
+      <div class="avatar">
+        {#if contactProfile?.avatarUrl}
+          <img src={contactProfile.avatarUrl} alt="{contactName} avatar" />
+        {:else}
+          {(contactName || contactId || '?').slice(0,1).toUpperCase()}
+        {/if}
+      </div>
       <div class="header-info">
         <div class="contact-name">{contactName || contactId}</div>
         <div class="status">
@@ -235,8 +306,16 @@
           {/if}
         </div>
       </div>
-      
-      <div class="call-controls">
+    
+        <div class="actions">
+          <div class="search-bar">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" />
+            </svg>
+            <input placeholder="Search messages" bind:value={searchTerm} />
+          </div>
+
+          <div class="call-controls">
         {#if isGroup}
           <button 
             class="icon-button" 
@@ -292,20 +371,41 @@
             </svg>
           </button>
         {/if}
+        </div>
       </div>
     </header>
+
+    {#if pinnedMessages.length}
+      <div class="pinned-bar">
+        {#each pinnedMessages as pm (pm.messageId)}
+          <div class="pinned-pill" on:click={() => scrollToMessage(pm.messageId)}>
+            <span class="pin-icon">📌</span>
+            <span class="pill-text">{pm.text || 'Pinned message'}</span>
+            {#if pm.messageId}
+              <button class="pill-unpin" on:click|stopPropagation={() => handleTogglePin(pm.messageId)}>✕</button>
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {/if}
 
     <div class="message-list" bind:this={listEl} on:scroll={handleScroll}>
       <div class="message-list-inner" style="height: {totalHeight ? totalHeight + 'px' : 'auto'}">
         <div style="transform: translateY({offsetY}px); will-change: transform;">
-          {#each visibleMessages as m, i (visibleStart + i)}
-            <MessageBubble 
-              isOwn={m.from === currentUserId} 
-              msg={m} 
-              on:edit={handleEdit}
-              on:delete={handleDelete}
-              on:reply={handleReply}
-            />
+          {#each visibleMessages as m, i (m.messageId || `${visibleStart}-${m.from}-${m.ts || i}`)}
+            <div data-message-id={m.messageId}>
+              <MessageBubble 
+                isOwn={m.from === currentUserId} 
+                msg={m} 
+                currentUserId={currentUserId}
+                isPinned={pinned?.includes(m.messageId || '')}
+                on:edit={handleEdit}
+                on:delete={handleDelete}
+                on:reply={handleReply}
+                on:react={handleReact}
+                on:togglePin={() => handleTogglePin(m.messageId)}
+              />
+            </div>
           {/each}
         </div>
       </div>
@@ -415,6 +515,8 @@
     padding-right: calc(1rem + env(safe-area-inset-right));
     flex-shrink: 0;
     z-index: 10;
+    position: relative;
+    transition: background 0.3s ease;
   }
 
   .back-button {
@@ -453,6 +555,14 @@
     font-weight: 800;
     font-size: 1.1rem;
     box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
 
   .header-info {
@@ -498,6 +608,38 @@
     font-weight: 600;
   }
 
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-left: auto;
+  }
+
+  .search-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: var(--surface-lighter);
+    border: 1px solid var(--surface-lighter);
+    border-radius: 12px;
+    padding: 0.35rem 0.5rem;
+    color: var(--subtext);
+    min-width: 180px;
+  }
+
+  .search-bar input {
+    background: none;
+    border: none;
+    outline: none;
+    color: var(--fg);
+    font-size: 0.9rem;
+    width: 100%;
+  }
+
+  .search-bar svg {
+    color: var(--subtext);
+  }
+
   .typing-indicator {
     color: var(--accent);
     font-weight: 700;
@@ -512,7 +654,6 @@
   .call-controls {
     display: flex;
     gap: 0.5rem;
-    margin-left: auto;
   }
   
   .icon-button.calling {
@@ -540,6 +681,58 @@
     scroll-behavior: smooth;
     display: flex;
     flex-direction: column;
+  }
+
+  .pinned-bar {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem 0;
+    overflow-x: auto;
+    background: var(--bg);
+  }
+
+  .pinned-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.6rem;
+    background: var(--surface);
+    border: 1px solid var(--surface-lighter);
+    border-radius: 10px;
+    color: var(--fg);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.2s;
+  }
+
+  .pinned-pill:hover {
+    border-color: var(--accent);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.08);
+  }
+
+  .pin-icon {
+    opacity: 0.7;
+  }
+
+  .pill-text {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .pill-unpin {
+    background: none;
+    border: none;
+    color: var(--subtext);
+    cursor: pointer;
+    padding: 0.1rem 0.3rem;
+    border-radius: 6px;
+    font-weight: 700;
+  }
+
+  .pill-unpin:hover {
+    background: var(--surface-lighter);
+    color: var(--fg);
   }
 
   .message-list-inner {

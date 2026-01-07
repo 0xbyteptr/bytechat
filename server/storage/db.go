@@ -107,6 +107,27 @@ func createTables() error {
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
 
+	-- Message reactions table
+	CREATE TABLE IF NOT EXISTS message_reactions (
+		id BIGSERIAL PRIMARY KEY,
+		conversation_id TEXT NOT NULL,
+		message_id TEXT NOT NULL,
+		emoji TEXT NOT NULL,
+		user_id TEXT NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE (conversation_id, message_id, emoji, user_id)
+	);
+
+	-- User profiles table
+	CREATE TABLE IF NOT EXISTS user_profiles (
+		id TEXT PRIMARY KEY,
+		display_name TEXT,
+		bio TEXT,
+		avatar_url TEXT,
+		banner_url TEXT,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	);
+
 	-- Push tokens table
 	CREATE TABLE IF NOT EXISTS push_tokens (
 		id TEXT PRIMARY KEY,
@@ -118,6 +139,7 @@ func createTables() error {
 	CREATE INDEX IF NOT EXISTS idx_message_history_to_id ON message_history(to_id);
 	CREATE INDEX IF NOT EXISTS idx_message_history_timestamp ON message_history(timestamp);
 	CREATE INDEX IF NOT EXISTS idx_group_members_user_id ON group_members(user_id);
+	CREATE INDEX IF NOT EXISTS idx_message_reactions_conv_msg ON message_reactions(conversation_id, message_id);
 	CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at);
 	`
 

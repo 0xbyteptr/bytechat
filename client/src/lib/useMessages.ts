@@ -22,11 +22,14 @@ export interface Message {
     actionBy?: string // who performed the action
     targetUser?: string // affected member
   }
+  reactions?: Record<string, string[]> // emoji -> list of user ids (local only)
+  failedDecrypt?: boolean
 }
 
 export const messagesMap = writable<Record<string, Message[]>>({})
 export const unreadMap = writable<Record<string, number>>({})
 export const typingMap = writable<Record<string, boolean>>({})
+export const pinnedMap = writable<Record<string, string[]>>({})
 
 export const totalUnread = derived(unreadMap, $unread => 
   Object.values($unread).reduce((a, b) => a + b, 0)
@@ -70,6 +73,46 @@ export function deleteMessage(contactId: string, messageId: string) {
       )
     }
   })
+}
+
+export function toggleReaction(contactId: string, messageId: string, emoji: string, userId: string) {
+  messagesMap.update(map => {
+    const messages = map[contactId] || []
+    return {
+      ...map,
+      [contactId]: messages.map(m => {
+        if (m.messageId !== messageId) return m
+        const reactions = { ...(m.reactions || {}) }
+        const current = new Set(reactions[emoji] || [])
+        if (current.has(userId)) {
+          current.delete(userId)
+        } else {
+          current.add(userId)
+        }
+        reactions[emoji] = Array.from(current)
+        return { ...m, reactions }
+      })
+    }
+  })
+}
+
+export function togglePin(contactId: string, messageId: string) {
+  pinnedMap.update(map => {
+    const pins = new Set(map[contactId] || [])
+    if (pins.has(messageId)) {
+      pins.delete(messageId)
+    } else {
+      pins.add(messageId)
+    }
+    return { ...map, [contactId]: Array.from(pins) }
+  })
+}
+
+export function isPinned(contactId: string, messageId: string): boolean {
+  let pinned: Record<string, string[]> = {}
+  const unsub = pinnedMap.subscribe(p => pinned = p)
+  unsub()
+  return new Set(pinned[contactId] || []).has(messageId)
 }
 
 export function incrementUnread(contactId: string) {

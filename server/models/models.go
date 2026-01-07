@@ -34,3 +34,13 @@ type Group struct {
 	CreatedAt   time.Time     `json:"createdAt"`
 	Settings    GroupSettings `json:"settings"`
 }
+
+// Profile represents a user's public profile metadata
+type Profile struct {
+	ID          string    `json:"id"`
+	DisplayName string    `json:"displayName,omitempty"`
+	Bio         string    `json:"bio,omitempty"`
+	AvatarURL   string    `json:"avatarUrl,omitempty"`
+	BannerURL   string    `json:"bannerUrl,omitempty"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
