@@ -1,6 +1,7 @@
 <script lang="ts">
   export let apiUrl: string;
   export let version: string | undefined;
+  export let onNavigate: ((path: string) => void) | undefined = undefined;
 
   const wsUrl =
     apiUrl.startsWith("https://")
@@ -39,6 +40,7 @@ bot.connect();`;
 <div class="dev-shell">
   <header class="hero">
     <div>
+      <button class="back-btn" on:click={() => onNavigate?.('/home')}>← Back to Chat</button>
       <p class="eyebrow">Developers</p>
       <h1>Build bots for ByteChat</h1>
       <p class="lede">
@@ -98,8 +100,9 @@ node -e "const nacl=require('tweetnacl');const k=nacl.box.keyPair();console.log(
 </div>
 
 <style>
-  /* (zachowano cały CSS bez zmian) */
   .dev-shell { padding: 48px 32px; max-width: 1080px; margin: 0 auto; color: var(--fg); }
+  .back-btn { background: transparent; border: 1px solid var(--surface-lighter); color: var(--fg); padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 14px; margin-bottom: 16px; transition: all 0.2s; }
+  .back-btn:hover { background: var(--surface); border-color: var(--accent); }
   .hero { display: grid; grid-template-columns: minmax(0, 2fr) 320px; gap: 24px; align-items: start; margin-bottom: 32px; }
   .eyebrow { text-transform: uppercase; letter-spacing: 0.1em; font-size: 12px; opacity: 0.7; margin: 0; }
   h1 { margin: 4px 0 8px; font-size: 34px; }

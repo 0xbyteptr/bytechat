@@ -23,6 +23,10 @@
   function openProfile(userId: string) {
     dispatch('openProfile', { userId })
   }
+  
+  function navigateToDevelopers() {
+    dispatch('navigate', { path: '/developers' })
+  }
 
   let newContactId = ''
   function addContact() {
@@ -66,6 +70,11 @@
         <button class="settings-btn" on:click={() => dispatch('logout')} title="Logout">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5">
             <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
+          </svg>
+        </button>
+        <button class="settings-btn" on:click={navigateToDevelopers} title="Developers">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/>
           </svg>
         </button>
         <button class="settings-btn" on:click={() => dispatch('openSettings')} title="Settings">

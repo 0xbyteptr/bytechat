@@ -2083,7 +2083,7 @@
 
 <div class="flex flex-col h-screen w-screen overflow-hidden bg-bg text-fg">
   {#if isDevelopersPage}
-    <Developers apiUrl={API_URL} {version} />
+    <Developers apiUrl={API_URL} {version} onNavigate={navigateTo} />
   {:else}
     {#if isLoading}
       <LoadingScreen status={loadingStatus} progress={loadingProgress} />
@@ -2131,6 +2131,7 @@
             on:logout={logout}
             on:openSettings={openSettings}
             on:update={installUpdate}
+            on:navigate={(e) => navigateTo(e.detail.path)}
           />
         </div>
 
@@ -2168,6 +2169,7 @@
               on:back={() => {
                 contact = null
                 showSidebar = true
+                navigateTo('/home')
               }}
             />
           </div>
