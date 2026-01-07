@@ -31,8 +31,15 @@ func handleGet(w http.ResponseWriter, r *http.Request) {
 
 	profile, ok := storage.GetProfile(id)
 	if !ok {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
+		// Auto-create empty profile for users without one (handles existing users)
+		emptyProfile := models.Profile{
+			ID: id,
+		}
+		if err := storage.SaveProfile(emptyProfile); err != nil {
+			http.Error(w, "failed to create profile", http.StatusInternalServerError)
+			return
+		}
+		profile = &emptyProfile
 	}
 
 	w.Header().Set("Content-Type", "application/json")
