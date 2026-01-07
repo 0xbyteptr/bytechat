@@ -198,6 +198,20 @@ export function connectWebSocket(
         })
       }
       
+      // Check if decrypted text is a voice message payload
+      let voicePayload: any = null
+      if (text) {
+        try {
+          const parsed = JSON.parse(text)
+          if (parsed.bytechat_voice && parsed.audioUrl) {
+            voicePayload = parsed
+            text = '' // Clear text for voice messages
+          }
+        } catch (e) {
+          // Not JSON, continue as regular text message
+        }
+      }
+      
       const msgObj: Message = {
         from: msg.from,
         text,
@@ -206,7 +220,14 @@ export function connectWebSocket(
         file: msg.file,
         editedAt: msg.editedAt,
         deleted: msg.deleted,
-        replyTo: msg.replyTo
+        replyTo: msg.replyTo,
+        ...(voicePayload && {
+          type: 'voice',
+          voiceData: {
+            audioUrl: voicePayload.audioUrl,
+            duration: voicePayload.duration
+          }
+        })
       }
       
       // Handle message actions

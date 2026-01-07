@@ -18,7 +18,6 @@
   import * as SessionLib from './lib/useSession'
   import * as MessagesLib from './lib/useMessages'
   import * as ContactsLib from './lib/useContacts'
-  import * as WebSocketLib from './lib/useWebSocket'
   import * as UpdatesLib from './lib/useUpdates'
   import * as FileHandlingLib from './lib/useFileHandling'
   import * as MessageCacheLib from './lib/useMessageCache'
@@ -29,6 +28,16 @@
   import { App } from '@capacitor/app';
   import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
   import { FileOpener } from '@capacitor-community/file-opener';
+
+  // Service imports
+  import { createMessagingService } from './lib/useMessaging'
+  import { createCallService } from './lib/useCallService'
+  import { createSettingsService } from './lib/useSettingsService'
+  import { createContactService } from './lib/useContactService'
+  import { createProfileService } from './lib/useProfileService'
+  import { createSessionService } from './lib/useSessionService'
+  import { createUIStateService } from './lib/useUIStateService'
+  import { createGroupService } from './lib/useGroupService'
 
   const API_URL = import.meta.env.VITE_API_URL || 'https://api.byteptr.xyz'
   const version = pkg.version
@@ -153,6 +162,16 @@
   let isMuted = false
   let remoteAudioEl: HTMLAudioElement | null = null
   
+  // Service instances (initialized when data is available)
+  let messagingService: any = null
+  let callService: any = null
+  let settingsService: any = null
+  let contactService: any = null
+  let profileService: any = null
+  let sessionService: any = null
+  let uiStateService: any = null
+  let groupService: any = null
+  
   // Subscribe to stores
   VoipLib.callState.subscribe(value => callState = value)
   VoipLib.callContact.subscribe(value => callContact = value)
@@ -167,7 +186,6 @@
   ContactsLib.groups.subscribe(value => groups = value)
   ContactsLib.contacts.subscribe(value => contacts = value)
   
-  WebSocketLib.wsStatus.subscribe(value => wsStatus = value)
   ContactsLib.onlineUsers.subscribe(value => onlineUsers = value)
   
   SessionLib.id.subscribe(value => id = value)
@@ -177,16 +195,10 @@
 
   async function requestAllPermissions() {
     loadingStatus = 'Requesting microphone access...'
-    loadingProgress = 20
+    loadingProgress = 30
     
     const micGranted = await PermissionsLib.requestMicrophonePermission()
     permissions.microphone = micGranted
-
-    loadingStatus = 'Requesting camera access...'
-    loadingProgress = 40
-    
-    const cameraGranted = await PermissionsLib.requestCameraPermission()
-    permissions.camera = cameraGranted
 
     loadingStatus = 'Requesting storage access...'
     loadingProgress = 50
@@ -309,7 +321,7 @@
 
     settingsProfileLoading = true
     try {
-      await loadProfile(id)
+      await profileService?.loadProfile(id)
       if (!settingsProfileDirty) {
         applyProfileToSettingsForm()
       }
@@ -341,7 +353,7 @@
       
       // Load if no profile or cache expired
       if (profile === undefined || !timestamp || (now - timestamp >= PROFILE_CACHE_TTL)) {
-        loadProfile(contact)
+        profileService?.loadProfile(contact)
       }
     }
     
@@ -373,7 +385,7 @@
         
         // Load if no profile or cache expired
         if (profile === undefined || !timestamp || (now - timestamp >= PROFILE_CACHE_TTL)) {
-          loadProfile(contact.id)
+          profileService?.loadProfile(contact.id)
         }
       }
     })
@@ -390,12 +402,22 @@
     showSidebar = true
     connect()
     NotificationsLib.setupNotifications(id, sessionToken, API_URL)
-    loadProfile(id)
+    profileService?.loadProfile(id)
     saveSession()
   }
 
   function connect() {
     if(!id || !sessionToken) return
+    
+    // Initialize services that don't need WebSocket first
+    uiStateService = createUIStateService()
+    contactService = createContactService({ API_URL, id })
+    profileService = createProfileService({ API_URL, id, sessionToken })
+    sessionService = createSessionService({ API_URL, sessionToken })
+    groupService = createGroupService({ API_URL, id, sessionToken })
+    settingsService = createSettingsService({ id, API_URL, sessionToken, uploadFile, loadProfile: (userId: string) => profileService?.loadProfile(userId) })
+    
+    // Establish WebSocket connection first
     ws = connectWS(id, sessionToken, async (msg)=>{
       // Handle presence updates - create new Set to trigger Svelte reactivity
       if (msg.type === 'presence') {
@@ -412,15 +434,23 @@
       
       // Handle VoIP signaling
       if (msg.type === 'call-offer') {
-        await handleCallOffer(msg)
+        try {
+          await VoipLib.handleCallOffer(msg.from, msg.offer, true)
+        } catch (error) {
+          console.error('Failed to answer call:', error)
+        }
         return
       }
       if (msg.type === 'call-answer') {
-        await handleCallAnswer(msg)
+        if (msg.answer) {
+          await VoipLib.handleCallAnswer(msg.answer)
+        }
         return
       }
       if (msg.type === 'call-ice-candidate') {
-        await handleIceCandidate(msg)
+        if (msg.candidate) {
+          await VoipLib.handleIceCandidate(msg.candidate)
+        }
         return
       }
       if (msg.type === 'call-end') {
@@ -637,11 +667,18 @@
           // Not a JSON/file message, treat as plain text
         }
 
-        // Avoid duplicates (especially from history)
-        const isDuplicate = (messagesMap[chatWith] || []).some(m => 
-          m.ts === msgObj.ts && m.text === msgObj.text && m.from === msgObj.from
-        )
-        if (isDuplicate) return
+        // Avoid duplicates by checking messageId
+        if (msgObj.messageId) {
+          const isDuplicate = (messagesMap[chatWith] || []).some(m => 
+            m.messageId && m.messageId === msgObj.messageId
+          )
+          if (isDuplicate) {
+            console.log('Skipping duplicate message:', msgObj.messageId)
+            return
+          }
+        }
+
+        console.log('Processing message:', { messageId: msgObj.messageId, from: msgObj.from, text: msgObj.text?.substring(0, 50) })
 
         // Use requestIdleCallback for non-urgent UI updates
         const updateMessages = () => {
@@ -690,29 +727,27 @@
     }, (status) => {
       wsStatus = status
     })
+    
+    // Initialize services that need WebSocket after it's created
+    messagingService = createMessagingService({
+      ws,
+      id,
+      getKeypair: () => keypair,
+      getKeys: () => keys,
+      getGroups: () => groups,
+      cryptoPool,
+      API_URL,
+      sessionToken,
+      uploadFile,
+      fetchContactKey: (name: string) => contactService?.fetchContactKey(name),
+      messagesMap,
+      updateMessagesMap: (updater) => {
+        messagesMap = updater(messagesMap)
+      }
+    })
+    callService = createCallService({ ws })
   }
 
-  async function fetchContactKey(name:string) {
-    if(!name || keys[name] || pendingKeys.has(name) || failedKeys.has(name)) return
-    pendingKeys.add(name)
-    try {
-      const res = await fetch(`${API_URL}/keys?id=${encodeURIComponent(name)}`)
-      if(res.ok) {
-        const data = await res.json()
-        if (data && data.publicKey) {
-          keys = { ...keys, [name]: data.publicKey }
-        } else {
-          failedKeys.add(name)
-        }
-      } else if (res.status === 404) {
-        failedKeys.add(name)
-      }
-    } catch (e) {
-      console.error('Failed to fetch key for', name, e)
-    } finally {
-      pendingKeys.delete(name)
-    }
-  }
 
   $: isDevelopersPage = route.kind === 'developers'
   $: if (route.kind === 'chat' && route.chatId && contact !== route.chatId) {
@@ -730,232 +765,11 @@
     }))
   }
 
-  async function sendTo(to:string, text:string, replyTo?: { messageId: string; text: string; from: string }) {
-    if(!ws || ws.readyState !== WebSocket.OPEN || isSending) return
-    
-    // Ensure text is a string
-    if (typeof text !== 'string') {
-      console.error('sendTo: text must be a string, got', typeof text, text)
-      return
-    }
-    
-    isSending = true
-    // Defer to next tick to allow UI to update
-    await new Promise(resolve => setTimeout(resolve, 10))
-    
-    try {
-      const messageId = Date.now() + '_' + Math.random().toString(36).slice(2, 11)
-      let payload: any = { to, messageId, replyTo }
-      
-      if (to.startsWith('#')) {
-        const g = groups.find(x => x.id === to)
-        if (!g) return
-        
-        const groupCiphers: any = {}
-        const recipients: Record<string, string> = {}
-        
-        for (const member of g.members) {
-          await fetchContactKey(member)
-          const mpk = keys[member]
-          if (mpk) recipients[member] = mpk
-        }
-        
-        if (keypair && Object.keys(recipients).length > 0) {
-          try {
-            const encrypted = await cryptoPool.batchEncrypt(keypair.secretKey, recipients, text)
-            Object.assign(groupCiphers, encrypted)
-          } catch (e) {
-            console.warn('Batch encryption failed, using fallback', e)
-            for (const member of g.members) {
-              const mpk = keys[member]
-              if (!mpk) continue
-              const { cipher, nonce } = encrypt(keypair.secretKey, mpk, text)
-              groupCiphers[member] = { cipher, nonce }
-            }
-          }
-        }
-        
-        payload.groupCiphers = groupCiphers
-      } else {
-        await fetchContactKey(to)
-        const pk = keys[to]
-        if(!pk) return
-        
-        if (keypair) {
-          try {
-            const { cipher, nonce } = await cryptoPool.encrypt(keypair.secretKey, pk, text)
-            payload.cipher = cipher
-            payload.nonce = nonce
-          } catch (e) {
-            console.warn('Worker encryption failed, using fallback', e)
-            const { cipher, nonce } = encrypt(keypair.secretKey, pk, text)
-            payload.cipher = cipher
-            payload.nonce = nonce
-          }
-        } else {
-          alert('No encryption key available for this contact')
-          return
-        }
-      }
-      
-      ws.send(JSON.stringify(payload))
-      messagesMap = {
-        ...messagesMap,
-        [to]: [...(messagesMap[to]||[]), { from: id, text, ts: Date.now(), messageId, replyTo }].sort((a, b) => (a.ts || 0) - (b.ts || 0))
-      }
-      sendTyping(false)
-    } finally {
-      isSending = false
-    }
-  }
+  // sendTo is now in messagingService
 
-  async function sendFile(to: string, fileData: string, fileName: string, fileType: string) {
-    if(!ws || ws.readyState !== WebSocket.OPEN || isSending) return
+  // sendFile is now in messagingService
 
-    isSending = true
-    // Defer to next tick to allow UI to update
-    await new Promise(resolve => setTimeout(resolve, 10))
-
-    try {
-      // Upload to CDN
-      let fileUrl = ''
-      try {
-        let blob: Blob;
-        if (fileData.startsWith('data:')) {
-          const parts = fileData.split(',');
-          const mime = parts[0].match(/:(.*?);/)?.[1] || '';
-          const b64 = parts[1];
-          
-          // More memory-efficient base64 decoding for large files
-          const chunkSize = 1024 * 1024; // 1MB chunks
-          const chunks: Uint8Array[] = []
-          
-          for (let i = 0; i < b64.length; i += chunkSize) {
-            const chunk = b64.slice(i, i + chunkSize)
-            const binary = atob(chunk)
-            const array = new Uint8Array(binary.length)
-            for (let j = 0; j < binary.length; j++) array[j] = binary.charCodeAt(j)
-            chunks.push(array)
-            
-            // Yield to main thread periodically
-            if (i % (chunkSize * 5) === 0) {
-              await new Promise(resolve => setTimeout(resolve, 0))
-            }
-          }
-          
-          blob = new Blob(chunks as BlobPart[], { type: mime });
-        } else {
-          const res = await fetch(fileData);
-          blob = await res.blob();
-        }
-
-        const formData = new FormData()
-        formData.append('file', blob, fileName)
-        
-        const uploadRes = await fetch(`${API_URL}/cdn/upload`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${sessionToken}`,
-            'X-ByteChat-ID': id
-          },
-          body: formData
-        })
-        
-        if (uploadRes.ok) {
-          const data = await uploadRes.json()
-          fileUrl = data.url
-        } else {
-          console.error('CDN upload failed')
-        }
-      } catch (e) {
-        console.error('Error uploading to CDN:', e)
-      }
-
-      await fetchContactKey(to)
-      const pk = keys[to]
-      if(!pk) return
-
-      const payloadToEncrypt = JSON.stringify({
-        bytechat_file: true,
-        fileName,
-        fileType,
-        fileData: fileUrl ? undefined : fileData, // Fallback to base64 if CDN failed
-        fileUrl
-      })
-
-      let payload: any = { to }
-      if (keypair) {
-        try {
-          const { cipher, nonce } = await cryptoPool.encrypt(keypair.secretKey, pk, payloadToEncrypt)
-          payload.cipher = cipher
-          payload.nonce = nonce
-        } catch (e) {
-          console.warn('Worker encryption failed, using fallback', e)
-          const { cipher, nonce } = encrypt(keypair.secretKey, pk, payloadToEncrypt)
-          payload.cipher = cipher
-          payload.nonce = nonce
-        }
-      }
-
-      ws.send(JSON.stringify(payload))
-      messagesMap = {
-        ...messagesMap,
-        [to]: [...(messagesMap[to]||[]), { from: id, text: `Sent file: ${fileName}`, file: { fileName, fileType, fileData, fileUrl }, ts: Date.now() }].sort((a, b) => (a.ts || 0) - (b.ts || 0))
-      }
-    } finally {
-      isSending = false
-    }
-  }
-
-  async function sendVoice(to: string, audioDataUrl: string, duration: number) {
-    if (!ws || ws.readyState !== WebSocket.OPEN || !keypair || !audioDataUrl) return
-    
-    try {
-      isSending = true
-      
-      // Convert data URL to Blob and upload
-      const blob = await fetch(audioDataUrl).then(r => r.blob())
-      const uploadUrl = await uploadFile(blob as File)
-      
-      if (!uploadUrl) {
-        console.error('Failed to upload voice message')
-        isSending = false
-        return
-      }
-      
-      await fetchContactKey(to)
-      const pk = keys[to]
-      if (!pk) return
-
-      const payloadToEncrypt = JSON.stringify({
-        bytechat_voice: true,
-        audioUrl: uploadUrl,
-        duration
-      })
-
-      let payload: any = { type: 'voice', to }
-      if (keypair) {
-        try {
-          const { cipher, nonce } = await cryptoPool.encrypt(keypair.secretKey, pk, payloadToEncrypt)
-          payload.cipher = cipher
-          payload.nonce = nonce
-        } catch (e) {
-          console.warn('Worker encryption failed, using fallback', e)
-          const { cipher, nonce } = encrypt(keypair.secretKey, pk, payloadToEncrypt)
-          payload.cipher = cipher
-          payload.nonce = nonce
-        }
-      }
-
-      ws.send(JSON.stringify(payload))
-      messagesMap = {
-        ...messagesMap,
-        [to]: [...(messagesMap[to]||[]), { from: id, type: 'voice', voiceData: { duration, audioUrl: uploadUrl }, ts: Date.now() }].sort((a, b) => (a.ts || 0) - (b.ts || 0))
-      }
-    } finally {
-      isSending = false
-    }
-  }
+  // sendVoice is now in messagingService
 
   function sendTyping(isTyping: boolean) {
     if (!ws || ws.readyState !== WebSocket.OPEN || !contact) return
@@ -970,63 +784,9 @@
     }, 3000)
   }
   
-  async function handleEdit(e: CustomEvent) {
-    const { to, messageId, text } = e.detail
-    if (!ws || ws.readyState !== WebSocket.OPEN || !keypair || !messageId) return
-    
-    try {
-      await fetchContactKey(to)
-      const pk = keys[to]
-      if (!pk) return
-      
-      const { cipher, nonce } = await cryptoPool.encrypt(keypair.secretKey, pk, text)
-      
-      ws.send(JSON.stringify({ 
-        type: 'edit', 
-        to, 
-        messageId,
-        cipher,
-        nonce
-      }))
-      
-      // Update local message
-      if (messagesMap[to]) {
-        messagesMap = {
-          ...messagesMap,
-          [to]: messagesMap[to].map(m => 
-            (messageId && m.messageId === messageId)
-              ? { ...m, text, editedAt: Date.now() } 
-              : m
-          )
-        }
-      }
-    } catch (e) {
-      console.error('Failed to edit message', e)
-    }
-  }
+  // handleEdit is now in messagingService
   
-  function handleDelete(e: CustomEvent) {
-    const { to, messageId } = e.detail
-    if (!ws || ws.readyState !== WebSocket.OPEN || !messageId) return
-    
-    ws.send(JSON.stringify({ 
-      type: 'delete', 
-      to, 
-      messageId
-    }))
-    
-    // Update local message
-    if (messagesMap[to]) {
-      messagesMap = {
-        ...messagesMap,
-        [to]: messagesMap[to].map(m => 
-          (messageId && m.messageId === messageId)
-            ? { ...m, deleted: true, text: '' } 
-            : m
-        )
-      }
-    }
-  }
+  // handleDelete is now in messagingService
 
   function applyReaction(chatId: string, messageId: string, emoji: string, userId: string) {
     const list = messagesMap[chatId]
@@ -1079,85 +839,9 @@
     }
   }
   
-  async function startCall(e: CustomEvent) {
-    const { to } = e.detail
-    if (!to) return
-    
-    try {
-      await VoipLib.startCall(to, true) // audio only
-    } catch (error) {
-      console.error('Failed to start call:', error)
-      alert('Failed to start call. Please check microphone permissions.')
-    }
-  }
-  
-  async function handleCallOffer(msg: any) {
-    try {
-      await VoipLib.handleCallOffer(msg.from, msg.offer, true)
-    } catch (error) {
-      console.error('Failed to answer call:', error)
-      alert('Failed to answer call. Please check microphone permissions.')
-    }
-  }
-  
-  async function handleCallAnswer(msg: any) {
-    if (msg.answer) {
-      await VoipLib.handleCallAnswer(msg.answer)
-    }
-  }
-  
-  async function handleIceCandidate(msg: any) {
-    if (msg.candidate) {
-      await VoipLib.handleIceCandidate(msg.candidate)
-    }
-  }
-  
-  function endCall() {
-    // Centralize signaling in VoipLib
-    VoipLib.endCall()
-  }
-  
-  function cancelCall() {
-    // Centralize signaling in VoipLib
-    VoipLib.cancelCall()
-  }
-  
-  function toggleMute() {
-    VoipLib.toggleMute()
-  }
+  // Call functions are now in callService, VoipLib handlers kept for WebSocket message routing
 
-  async function addContact(targetId: string, name?: string) {
-    if (targetId === id) {
-      alert("You can't add yourself.")
-      return
-    }
-    if (messagesMap[targetId]) {
-      contact = targetId
-      return
-    }
-    
-    // Defer to allow UI to update
-    await new Promise(resolve => setTimeout(resolve, 10))
-    
-    try {
-      const res = await fetch(`${API_URL}/keys?id=${encodeURIComponent(targetId)}`)
-      if (res.ok) {
-        const data = await res.json()
-        keys = { ...keys, [targetId]: data.publicKey }
-        messagesMap = { ...messagesMap, [targetId]: [] }
-        // Add contact with optional nickname
-        if (!contacts.find(c => c.id === targetId)) {
-          contacts = [...contacts, { id: targetId, name: name || undefined, last: '', unread: 0 }]
-        }
-        contact = targetId
-      } else {
-        alert(`User "${targetId}" not found on server.`)
-      }
-    } catch (e) {
-      console.error('Error adding contact:', e)
-      alert('Error adding contact')
-    }
-  }
+  // addContact is now in contactService
 
   async function exportKeys() {
     let content = ''
@@ -1197,56 +881,7 @@
     }
   }
 
-  async function validateSession() {
-    if (!isLoggedIn || !id || !sessionToken) return
-    
-    const now = Date.now()
-    // Rate limit validation attempts (max once per 60 seconds)
-    if (now - lastValidationAttempt < 60000) return
-    lastValidationAttempt = now
-    
-    try {
-      const res = await fetch(`${API_URL}/validate-session?id=${encodeURIComponent(id)}`, {
-        headers: {
-          'Authorization': `Bearer ${sessionToken}`
-        },
-        // Add timeout to prevent hanging
-        signal: AbortSignal.timeout(10000)
-      })
-      
-      if (res.status === 401) {
-        sessionValidationFailures++
-        console.warn(`Session validation failed (${sessionValidationFailures}/5)`, {
-          status: res.status,
-          id,
-          timestamp: new Date().toISOString()
-        })
-        
-        // Only logout after 5 consecutive failures to avoid false positives
-        if (sessionValidationFailures >= 5) {
-          console.error('Multiple session validation failures, logging out', {
-            failures: sessionValidationFailures,
-            timestamp: new Date().toISOString()
-          })
-          logout()
-        }
-      } else if (res.ok) {
-        // Reset failure count on success
-        if (sessionValidationFailures > 0) {
-          console.log('Session validation recovered', { previousFailures: sessionValidationFailures })
-        }
-        sessionValidationFailures = 0
-      } else {
-        // Other errors (500, 503, etc.) - don't count as validation failures
-        console.warn('Session validation returned non-401 error, ignoring', { status: res.status })
-      }
-    } catch (e) {
-      // Network error or timeout - don't logout, user might be offline
-      console.warn('Failed to validate session (network error), staying logged in', e)
-      // Don't increment failures on network errors
-      sessionValidationFailures = 0
-    }
-  }
+  // validateSession is now in sessionService
 
   function logout() {
     isLoggedIn = false
@@ -1393,45 +1028,7 @@
     } catch (e) {}
   }
 
-  async function loadProfile(userId: string) {
-    if (!userId) return
-
-    // Check if profile is already cached and not expired
-    const now = Date.now()
-    if (profiles[userId] !== undefined && profileTimestamps[userId]) {
-      if (now - profileTimestamps[userId] < PROFILE_CACHE_TTL) {
-        return // Use cached profile
-      }
-    }
-
-    // Avoid duplicate concurrent requests for the same profile
-    if (profilesLoading.has(userId)) {
-      return
-    }
-
-    profilesLoading.add(userId)
-    profileLoading = true
-    profileError = ''
-
-    try {
-      const res = await fetch(`${API_URL}/profile?id=${encodeURIComponent(userId)}`)
-      if (res.ok) {
-        const data = await res.json()
-        profiles = { ...profiles, [userId]: data }
-        profileTimestamps[userId] = Date.now()
-      } else if (res.status === 404) {
-        profiles = { ...profiles, [userId]: null }
-        profileTimestamps[userId] = Date.now()
-      } else {
-        profileError = 'Failed to load profile'
-      }
-    } catch (e) {
-      profileError = 'Failed to load profile'
-    } finally {
-      profilesLoading.delete(userId)
-      profileLoading = false
-    }
-  }
+  // loadProfile is now in profileService
 
   function setNotificationPref(chatId: string, mode: 'all' | 'mentions' | 'mute') {
     if (!chatId) return
@@ -1443,29 +1040,7 @@
     }
   }
 
-  async function saveProfile(e: CustomEvent<{ profile: any }>) {
-    const p = e.detail?.profile
-    if (!p || !sessionToken || p.id !== id) return
-    profileLoading = true
-    profileError = ''
-    try {
-      const res = await fetch(`${API_URL}/profile`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${sessionToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(p)
-      })
-      if (!res.ok) throw new Error('save failed')
-      profiles = { ...profiles, [id]: { ...p, updatedAt: Date.now() } }
-      contacts = contacts.map(c => c.id === id ? { ...c, name: p.displayName || c.name } : c)
-    } catch (err) {
-      profileError = 'Failed to save profile'
-    } finally {
-      profileLoading = false
-    }
-  }
+  // saveProfile is now in profileService/settingsService
 
   async function uploadFile(file: File): Promise<string | null> {
     if (!id || !sessionToken) return null
@@ -1493,65 +1068,9 @@
     }
   }
 
-  async function handleAvatarUpload(e: Event) {
-    const input = e.target as HTMLInputElement
-    const file = input.files?.[0]
-    if (!file) return
+  // handleAvatarUpload is now in settingsService
 
-    if (!file.type.startsWith('image/')) {
-      settingsProfileError = 'Please select an image file'
-      return
-    }
-
-    if (file.size > 5 * 1024 * 1024) {
-      settingsProfileError = 'Avatar must be less than 5MB'
-      return
-    }
-
-    uploadingAvatar = true
-    settingsProfileError = ''
-
-    const url = await uploadFile(file)
-    if (url) {
-      settingsProfile.avatarUrl = url
-      markSettingsProfileDirty()
-    } else {
-      settingsProfileError = 'Failed to upload avatar'
-    }
-
-    uploadingAvatar = false
-    input.value = ''
-  }
-
-  async function handleBannerUpload(e: Event) {
-    const input = e.target as HTMLInputElement
-    const file = input.files?.[0]
-    if (!file) return
-
-    if (!file.type.startsWith('image/')) {
-      settingsProfileError = 'Please select an image file'
-      return
-    }
-
-    if (file.size > 10 * 1024 * 1024) {
-      settingsProfileError = 'Banner must be less than 10MB'
-      return
-    }
-
-    uploadingBanner = true
-    settingsProfileError = ''
-
-    const url = await uploadFile(file)
-    if (url) {
-      settingsProfile.bannerUrl = url
-      markSettingsProfileDirty()
-    } else {
-      settingsProfileError = 'Failed to upload banner'
-    }
-
-    uploadingBanner = false
-    input.value = ''
-  }
+  // handleBannerUpload is now in settingsService
 
   async function saveSettingsProfile() {
     if (!id || !sessionToken) return
@@ -1612,7 +1131,7 @@
     }
   }
 
-  onMount(()=>{
+  onMount(() => {
     if (route.kind === 'developers') {
       isLoading = false
       return
@@ -1674,7 +1193,7 @@
             rebuildContacts()
             connect()
             NotificationsLib.setupNotifications(id, sessionToken, API_URL)
-            loadProfile(id)
+            profileService?.loadProfile(id)
             // Skip immediate validation - let periodic check handle it
           }
         } catch (e) {
@@ -1698,7 +1217,7 @@
                 rebuildContacts()
                 connect()
                 NotificationsLib.setupNotifications(id, sessionToken, API_URL)
-                loadProfile(id)
+                profileService?.loadProfile(id)
                 console.log('Restored from backup')
               }
             }
@@ -1711,7 +1230,7 @@
       // Check session every 5 minutes instead of every minute
       const sessionInterval = setInterval(() => {
         if (isLoggedIn) {
-          validateSession()
+          sessionService?.validateSession()
           fetchGroups()
         }
       }, 300000)
@@ -1729,7 +1248,7 @@
             
             if (callStateValue !== 'idle') {
               console.log('Back button: ending active call')
-              endCall()
+              callService?.endCall()
               return
             }
             
@@ -1812,7 +1331,7 @@
     
     if (callStateValue !== 'idle') {
       try {
-        endCall()
+        VoipLib.endCall()
       } catch (e) {
         console.warn('Failed to end call during cleanup:', e)
       }
@@ -2016,6 +1535,8 @@
     cursor: pointer;
     border: none;
     transition: opacity 0.2s, transform 0.1s;
+    min-height: 44px; /* Better touch target for mobile */
+    -webkit-tap-highlight-color: transparent;
   }
 
   button:active { transform: scale(0.98); }
@@ -2043,10 +1564,11 @@
     width: 320px;
     height: 100%;
     flex-shrink: 0;
-    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s;
+    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s ease;
     background: var(--surface);
     padding-left: env(safe-area-inset-left);
     z-index: 10;
+    will-change: transform;
   }
   
   .chat-wrapper {
@@ -2058,6 +1580,7 @@
     flex-direction: column;
     padding-right: env(safe-area-inset-right);
     padding-bottom: env(safe-area-inset-bottom);
+    will-change: transform;
   }
 
   .modal-overlay {
@@ -2071,8 +1594,8 @@
     z-index: 100;
     display: flex;
     align-items: center;
-    justify-content: center;
-    padding: 1rem;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .modal-content {
@@ -2084,6 +1607,11 @@
     padding: 2rem;
     box-shadow: 0 20px 40px rgba(0,0,0,0.4);
     display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    max-height: 90vh;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touchex;
     flex-direction: column;
     gap: 1.5rem;
   }
@@ -2106,16 +1634,18 @@
     color: var(--subtext);
     cursor: pointer;
     padding: 0.5rem;
-    border-radius: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s;
+    min-width: 44px;
+    min-height: 44px;
+    -webkit-tap-highlight-color: transparent;
   }
 
   .close-btn:hover {
     color: var(--fg);
     background: var(--surface-lighter);
+  }
+  
+  .close-btn:active {
+    transform: scale(0.95);
   }
 
   .settings-section {
@@ -2154,6 +1684,9 @@
 
   .settings-tab {
     border: none;
+    min-height: 44px;
+    -webkit-tap-highlight-color: transparent;
+    font-size: 0.8rem;
     background: transparent;
     color: var(--subtext);
     padding: 0.65rem 0.75rem;
@@ -2224,19 +1757,28 @@
     font-size: 0.8rem;
     color: var(--subtext);
     font-weight: 700;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
   }
 
-  .settings-input,
   .settings-textarea {
-    width: 100%;
-    background: var(--surface);
-    border: 1px solid var(--surface-lighter);
-    color: var(--fg);
-    border-radius: 10px;
-    padding: 0.75rem;
-    font-size: 0.95rem;
+    resize: vertical;
+    min-height: 96px;
+    font-family: inherit;
   }
 
+  .settings-input:disabled,
+  .settings-textarea:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+  
+  .settings-input:focus,
+  .settings-textarea:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;  
+  }
   .settings-textarea {
     resize: vertical;
     min-height: 96px;
@@ -2284,25 +1826,98 @@
     cursor: pointer;
     font-size: 1.2rem;
     transition: opacity 0.2s;
-    flex-shrink: 0;
-  }
-
-  .upload-btn:hover:not(:disabled) {
-    opacity: 0.85;
-  }
-
-  .upload-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
   }
 
   @media (max-width: 768px) {
-
     .sidebar-wrapper {
       width: 100%;
       position: absolute;
       top: 0;
       left: 0;
+      z-index: 10;
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    .chat-wrapper {
+      width: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 25;
+      padding-top: env(safe-area-inset-top);
+    }
+
+    .hidden-mobile {
+      display: none !important;
+    }
+    
+    .modal-overlay {
+      padding: 0;
+      align-items: flex-end;
+    }
+    
+    .modal-content {
+      border-radius: 24px 24px 0 0;
+      max-width: 100%;
+      max-height: 95vh;
+      padding: 1.5rem;
+      padding-bottom: calc(1.5rem + env(safe-area-inset-bottom));
+      margin: 0;
+    }
+    
+    .modal-title {
+      font-size: 1.25rem;
+    }
+    
+    .settings-tabs {
+      grid-template-columns: repeat(2, 1fr);
+      gap: 0.4rem;
+      padding: 0.25rem;
+    }
+    
+    .settings-tab {
+      font-size: 0.75rem;
+      padding: 0.5rem 0.5rem;
+      white-space: nowrap;
+    }
+    
+    .profile-banner {
+      height: 100px;
+    }
+    
+    .profile-avatar {
+      width: 64px;
+      height: 64px;
+    }
+    
+    button {
+      font-size: 0.9rem;
+      padding: 0.65rem 1rem;
+    }
+    
+    .settings-input,
+    .settings-textarea {
+      font-size: 16px; /* Prevents zoom on iOS */
+    }
+  }
+  
+  /* Smooth scrolling on mobile */
+  @media (max-width: 768px) {
+    * {
+      -webkit-overflow-scrolling: touch;
+    }
+  }
+  
+  /* Better touch feedback */
+  @media (hover: none) and (pointer: coarse) {
+    button:hover {
+      opacity: 1;
+    }
+    
+    button:active {
+      opacity: 0.8;
+      transform: scale(0.97);
       z-index: 10;
     }
 
@@ -2363,10 +1978,10 @@
               selectedUser = e.detail.userId
               selectedUserOnline = onlineUsers.has(e.detail.userId)
               selectedUserCommonGroups = groups.filter((g) => g.members.includes(e.detail.userId))
-              loadProfile(e.detail.userId)
+              profileService?.loadProfile(e.detail.userId)
               showUserProfile = true
             }}
-            on:addContact={(e) => addContact(e.detail.id)}
+            on:addContact={(e) => contactService?.addContact(e.detail.id)}
             on:createGroup={(e) => createGroup(e.detail.name, e.detail.members)}
             on:logout={logout}
             on:openSettings={openSettings}
@@ -2392,19 +2007,22 @@
               group={selectedGroup}
               pinned={pinnedMap[contact] || []}
               notificationMode={notificationPrefs[contact] || 'all'}
-              on:send={(e) => sendTo(e.detail.to, e.detail.text, e.detail.replyTo)}
-              on:sendFile={(e) => sendFile(e.detail.to, e.detail.fileData, e.detail.fileName, e.detail.fileType)}
-              on:sendVoice={(e) => sendVoice(e.detail.to, e.detail.audioBlob, e.detail.duration)}
-              on:edit={handleEdit}
-              on:delete={handleDelete}
+              on:send={(e) => {
+                console.log('Send event fired', { messagingService: !!messagingService, ws: !!ws, detail: e.detail })
+                messagingService?.sendTo(e.detail.to, e.detail.text, e.detail.replyTo)
+              }}
+              on:sendFile={(e) => messagingService?.sendFile(e.detail.to, e.detail.fileData, e.detail.fileName, e.detail.fileType)}
+              on:sendVoice={(e) => messagingService?.sendVoice(e.detail.to, e.detail.audioBlob, e.detail.duration)}
+              on:edit={(e) => messagingService?.handleEdit(e.detail.to, e.detail.messageId, e.detail.text)}
+              on:delete={(e) => messagingService?.handleDelete(e.detail.to, e.detail.messageId)}
               on:react={handleReact}
               on:setNotificationMode={(e) => setNotificationPref(contact, e.detail.mode)}
               on:togglePin={handleTogglePin}
               on:typing={handleTyping}
-              on:startCall={startCall}
-              on:endCall={endCall}
-              on:cancelCall={cancelCall}
-              on:toggleMute={toggleMute}
+              on:startCall={(e) => callService?.startCall(e.detail.to)}
+              on:endCall={() => callService?.endCall()}
+              on:cancelCall={() => callService?.cancelCall()}
+              on:toggleMute={() => callService?.toggleMute()}
               on:openGroupSettings={() => {
                 selectedGroup = groups.find((g) => g.id === contact)
                 showGroupSettings = true
@@ -2529,7 +2147,7 @@
                         type="file"
                         accept="image/*"
                         style="display: none;"
-                        on:change={handleAvatarUpload}
+                        on:change={(e) => settingsService?.handleAvatarUpload(e)}
                         id="avatar-upload"
                       />
                       <button
@@ -2555,7 +2173,7 @@
                         type="file"
                         accept="image/*"
                         style="display: none;"
-                        on:change={handleBannerUpload}
+                        on:change={(e) => settingsService?.handleBannerUpload(e)}
                         id="banner-upload"
                       />
                       <button
@@ -2644,13 +2262,13 @@
         isOpen={showUserProfile}
         isOnline={selectedUserOnline}
         commonGroups={selectedUserCommonGroups}
-        on:saveProfile={saveProfile}
+        on:saveProfile={(e) => profileService?.saveProfile(e)}
         on:startChat={() => {
           contact = selectedUser
           showUserProfile = false
         }}
         on:addToContacts={(e) => {
-          addContact(e.detail.userId, e.detail.name)
+          contactService?.addContact(e.detail.userId, e.detail.name)
           showUserProfile = false
         }}
         on:removeFromContacts={(e) => {

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte'
   import { renderMarkdown } from '../lib/markdown'
+  import { parseEmoji } from '../lib/emojiParser'
   
   export let msg: { 
     from: string; 
@@ -313,7 +314,7 @@
         ></audio>
       </div>
     {:else}
-      <div class="text">{@html renderMarkdown(msg.text)}</div>
+      <div class="text">{@html renderMarkdown(parseEmoji(msg.text))}</div>
       {#if previewData}
         {#if embed && embed.type === 'youtube'}
           <div class="embed-card">

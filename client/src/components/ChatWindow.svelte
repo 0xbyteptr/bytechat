@@ -4,6 +4,8 @@
   import VoiceRecorder from './VoiceRecorder.svelte'
   import { createEventDispatcher, afterUpdate, tick } from 'svelte'
   import { formatTimestamp, isMentioned } from '../lib/chatEnhancements'
+  import { parseEmoji } from '../lib/emojiParser'
+  
   export let currentUserId: string
   export let contactId: string | null = null
   export let contactName: string | null = null
@@ -14,8 +16,7 @@
   export let isOnline = false
   export let isGroup = false
   export let notificationMode: 'all' | 'mentions' | 'mute' = 'all'
-  // @ts-ignore - external reference
-  export const group: any = null
+  export let group: any = null
   interface Message {
     from: string;
     text: string;

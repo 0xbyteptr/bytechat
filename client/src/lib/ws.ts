@@ -82,7 +82,10 @@ export function connectWS(id: string, token: string, onMessage: (m: any)=>void, 
     
     ws.onerror = (ev) => {
       console.error('WebSocket Error details:', ev)
-      ws?.close()
+      // Don't force close on error, allow reconnection
+      if (ws?.readyState !== WebSocket.CLOSED) {
+        ws?.close()
+      }
     }
   }
 
@@ -90,10 +93,10 @@ export function connectWS(id: string, token: string, onMessage: (m: any)=>void, 
 
   return {
     send: (data: string) => {
-      if (authenticated && ws?.readyState === WebSocket.OPEN) {
+      if (authenticated && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(data)
       } else {
-        console.warn('Cannot send: WebSocket not authenticated or not open')
+        console.warn('Cannot send: WebSocket not authenticated or not open', { authenticated, readyState: ws?.readyState })
       }
     },
     close: () => { 

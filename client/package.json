@@ -19,7 +19,8 @@
     "@vercel/analytics": "^1.6.1",
     "svelte": "^4.0.0",
     "tweetnacl": "^1.0.3",
-    "tweetnacl-util": "^0.15.1"
+    "tweetnacl-util": "^0.15.1",
+    "twemoji": "^14.0.2"
   },
   "devDependencies": {
     "@capacitor/android": "^8.0.0",
