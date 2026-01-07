@@ -51,6 +51,9 @@
   let profiles: Record<string, any> = {}
   let profileLoading = false
   let profileError = ''
+  let profilesLoading = new Set<string>() // Track which profiles are currently loading
+  let profileTimestamps: Record<string, number> = {} // Track when profiles were last fetched
+  const PROFILE_CACHE_TTL = 5 * 60 * 1000 // 5 minutes cache TTL
   
   // WebSocket state
   let ws: { send: (d: string) => void, close: () => void, readyState: number } | null = null
@@ -244,6 +247,14 @@
     settingsProfileError = ''
   }
 
+  function invalidateProfileCache(userId: string) {
+    delete profileTimestamps[userId]
+  }
+
+  function getCachedProfile(userId: string) {
+    return profiles[userId]
+  }
+
   async function openSettings() {
     settingsTab = 'general'
     settingsProfileDirty = false
@@ -284,9 +295,16 @@
         .catch(err => console.warn('Failed to load cached messages:', err))
     }
     
-    // Load contact profile if not already loaded
-    if (contact && !contact.startsWith('#') && !profiles[contact]) {
-      loadProfile(contact)
+    // Load contact profile if not already loaded or if cache expired
+    if (contact && !contact.startsWith('#')) {
+      const now = Date.now()
+      const profile = profiles[contact]
+      const timestamp = profileTimestamps[contact]
+      
+      // Load if no profile or cache expired
+      if (profile === undefined || !timestamp || (now - timestamp >= PROFILE_CACHE_TTL)) {
+        loadProfile(contact)
+      }
     }
     
     // Send read receipts for unread messages from this contact
@@ -1234,21 +1252,40 @@
 
   async function loadProfile(userId: string) {
     if (!userId) return
+
+    // Check if profile is already cached and not expired
+    const now = Date.now()
+    if (profiles[userId] !== undefined && profileTimestamps[userId]) {
+      if (now - profileTimestamps[userId] < PROFILE_CACHE_TTL) {
+        return // Use cached profile
+      }
+    }
+
+    // Avoid duplicate concurrent requests for the same profile
+    if (profilesLoading.has(userId)) {
+      return
+    }
+
+    profilesLoading.add(userId)
     profileLoading = true
     profileError = ''
+
     try {
       const res = await fetch(`${API_URL}/profile?id=${encodeURIComponent(userId)}`)
       if (res.ok) {
         const data = await res.json()
         profiles = { ...profiles, [userId]: data }
+        profileTimestamps[userId] = Date.now()
       } else if (res.status === 404) {
         profiles = { ...profiles, [userId]: null }
+        profileTimestamps[userId] = Date.now()
       } else {
         profileError = 'Failed to load profile'
       }
     } catch (e) {
       profileError = 'Failed to load profile'
     } finally {
+      profilesLoading.delete(userId)
       profileLoading = false
     }
   }
@@ -1390,6 +1427,7 @@
       if (!res.ok) throw new Error('save failed')
 
       profiles = { ...profiles, [id]: { ...payload, updatedAt: Date.now() } }
+      profileTimestamps[id] = Date.now() // Update cache timestamp
       contacts = contacts.map(c => c.id === id ? { ...c, name: payload.displayName || c.name } : c)
       settingsProfileDirty = false
       settingsProfileSaved = true

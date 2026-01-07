@@ -1,11 +1,18 @@
 package main
 
 import (
+	"compress/gzip"
+	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"strings"
+	"syscall"
+	"time"
 
 	"bytechat/auth"
 	"bytechat/cdn"
@@ -23,6 +30,32 @@ var (
 	// Max file size (default 50MB)
 	maxFileSize int64 = 50 * 1024 * 1024
 )
+
+// gzipWriter wraps http.ResponseWriter with gzip compression
+type gzipResponseWriter struct {
+	io.Writer
+	http.ResponseWriter
+}
+
+func (w gzipResponseWriter) Write(b []byte) (int, error) {
+	return w.Writer.Write(b)
+}
+
+// Gzip middleware for response compression
+func gzipMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		defer gz.Close()
+
+		next.ServeHTTP(gzipResponseWriter{Writer: gz, ResponseWriter: w}, r)
+	})
+}
 
 func init() {
 	// Try loading from current directory, then from /server directory if we're in the root
@@ -64,6 +97,7 @@ func init() {
 func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
@@ -84,8 +118,38 @@ func main() {
 	addr := ":" + port
 
 	handler := middleware.CORS(mux)
+	handler = middleware.Cache(handler)
+	handler = gzipMiddleware(handler)
 	handler = middleware.Logging(handler)
 
+	// Create server with optimized settings
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1MB
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	// Handle graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		sig := <-sigChan
+		log.Printf("Received signal: %v\n", sig)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("Server shutdown error: %v\n", err)
+		}
+	}()
+
 	fmt.Printf("ByteChat server starting on %s (Max File Size: %d MB)\n", addr, maxFileSize/1024/1024)
-	log.Fatal(http.ListenAndServe(addr, handler))
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
+	log.Println("Server stopped gracefully")
 }

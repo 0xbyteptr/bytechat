@@ -30,6 +30,25 @@ func (rw *statusResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return hijacker.Hijack()
 }
 
+// Cache middleware for static content
+func Cache(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Set cache headers for CDN files
+		if strings.HasPrefix(r.URL.Path, "/cdn/file/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable") // 1 year for immutable files
+		} else if strings.HasPrefix(r.URL.Path, "/health") {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		} else {
+			// Default: no cache for dynamic content
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			w.Header().Set("Pragma", "no-cache")
+			w.Header().Set("Expires", "0")
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
 // CORS middleware
 func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

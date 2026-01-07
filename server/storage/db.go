@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	_ "github.com/lib/pq"
 )
@@ -31,6 +32,12 @@ func InitDB() error {
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
+
+	// Configure connection pool
+	db.SetMaxOpenConns(25)                 // Max concurrent connections
+	db.SetMaxIdleConns(5)                  // Idle connections to keep alive
+	db.SetConnMaxLifetime(5 * time.Minute) // Reuse connections for max 5 minutes
+	db.SetConnMaxIdleTime(2 * time.Minute) // Close idle connections after 2 minutes
 
 	// Test the connection
 	if err := db.Ping(); err != nil {
@@ -138,9 +145,14 @@ func createTables() error {
 	-- Create indexes for better performance
 	CREATE INDEX IF NOT EXISTS idx_message_history_to_id ON message_history(to_id);
 	CREATE INDEX IF NOT EXISTS idx_message_history_timestamp ON message_history(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_message_history_from_to ON message_history(from_id, to_id, timestamp DESC);
 	CREATE INDEX IF NOT EXISTS idx_group_members_user_id ON group_members(user_id);
+	CREATE INDEX IF NOT EXISTS idx_group_members_group_id ON group_members(group_id);
 	CREATE INDEX IF NOT EXISTS idx_message_reactions_conv_msg ON message_reactions(conversation_id, message_id);
 	CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at);
+	CREATE INDEX IF NOT EXISTS idx_public_keys_created ON public_keys(created_at);
+	CREATE INDEX IF NOT EXISTS idx_user_profiles_id ON user_profiles(id);
+	CREATE INDEX IF NOT EXISTS idx_push_tokens_id ON push_tokens(id);
 	`
 
 	_, err := db.Exec(schema)
