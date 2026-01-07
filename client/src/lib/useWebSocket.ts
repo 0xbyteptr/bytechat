@@ -122,7 +122,7 @@ export function connectWebSocket(
           return
         }
         
-        if (!voicePayload.bytechat_voice || !voicePayload.audioData) {
+        if (!voicePayload.bytechat_voice || !voicePayload.audioUrl) {
           console.warn('Invalid voice message payload')
           return
         }
@@ -133,7 +133,7 @@ export function connectWebSocket(
           ts: msg.ts || Date.now(),
           type: 'voice',
           voiceData: {
-            audioUrl: voicePayload.audioData,
+            audioUrl: voicePayload.audioUrl,
             duration: voicePayload.duration
           }
         }

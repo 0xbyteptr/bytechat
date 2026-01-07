@@ -913,13 +913,23 @@
     try {
       isSending = true
       
+      // Convert data URL to Blob and upload
+      const blob = await fetch(audioDataUrl).then(r => r.blob())
+      const uploadUrl = await uploadFile(blob as File)
+      
+      if (!uploadUrl) {
+        console.error('Failed to upload voice message')
+        isSending = false
+        return
+      }
+      
       await fetchContactKey(to)
       const pk = keys[to]
       if (!pk) return
 
       const payloadToEncrypt = JSON.stringify({
         bytechat_voice: true,
-        audioData: audioDataUrl,
+        audioUrl: uploadUrl,
         duration
       })
 
@@ -940,7 +950,7 @@
       ws.send(JSON.stringify(payload))
       messagesMap = {
         ...messagesMap,
-        [to]: [...(messagesMap[to]||[]), { from: id, type: 'voice', voiceData: { duration, audioUrl: audioDataUrl }, ts: Date.now() }].sort((a, b) => (a.ts || 0) - (b.ts || 0))
+        [to]: [...(messagesMap[to]||[]), { from: id, type: 'voice', voiceData: { duration, audioUrl: uploadUrl }, ts: Date.now() }].sort((a, b) => (a.ts || 0) - (b.ts || 0))
       }
     } finally {
       isSending = false
