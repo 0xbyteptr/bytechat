@@ -1112,34 +1112,50 @@
     if (!isLoggedIn || !id || !sessionToken) return
     
     const now = Date.now()
-    // Rate limit validation attempts (max once per 30 seconds)
-    if (now - lastValidationAttempt < 30000) return
+    // Rate limit validation attempts (max once per 60 seconds)
+    if (now - lastValidationAttempt < 60000) return
     lastValidationAttempt = now
     
     try {
       const res = await fetch(`${API_URL}/validate-session?id=${encodeURIComponent(id)}`, {
         headers: {
           'Authorization': `Bearer ${sessionToken}`
-        }
+        },
+        // Add timeout to prevent hanging
+        signal: AbortSignal.timeout(10000)
       })
       
       if (res.status === 401) {
         sessionValidationFailures++
-        console.warn(`Session validation failed (${sessionValidationFailures}/3)`)
+        console.warn(`Session validation failed (${sessionValidationFailures}/5)`, {
+          status: res.status,
+          id,
+          timestamp: new Date().toISOString()
+        })
         
-        // Only logout after 3 consecutive failures
-        if (sessionValidationFailures >= 3) {
-          console.warn('Multiple session validation failures, logging out')
+        // Only logout after 5 consecutive failures to avoid false positives
+        if (sessionValidationFailures >= 5) {
+          console.error('Multiple session validation failures, logging out', {
+            failures: sessionValidationFailures,
+            timestamp: new Date().toISOString()
+          })
           logout()
         }
       } else if (res.ok) {
         // Reset failure count on success
+        if (sessionValidationFailures > 0) {
+          console.log('Session validation recovered', { previousFailures: sessionValidationFailures })
+        }
         sessionValidationFailures = 0
+      } else {
+        // Other errors (500, 503, etc.) - don't count as validation failures
+        console.warn('Session validation returned non-401 error, ignoring', { status: res.status })
       }
     } catch (e) {
-      // Network error - don't logout, user might be offline
+      // Network error or timeout - don't logout, user might be offline
       console.warn('Failed to validate session (network error), staying logged in', e)
-      sessionValidationFailures = 0 // Reset on network errors
+      // Don't increment failures on network errors
+      sessionValidationFailures = 0
     }
   }
 
@@ -1530,7 +1546,8 @@
       const handleVisibilityChange = () => {
         isAppVisible = document.visibilityState === 'visible'
         if (isAppVisible) {
-          validateSession()
+          // Refresh groups and messages but don't validate session immediately
+          // Session validation will happen on its regular interval
           fetchGroups()
         }
       }
@@ -1558,7 +1575,7 @@
             NotificationsLib.setupNotifications(id, sessionToken, API_URL)
             loadProfile(id)
             // Validate session after a delay to allow WebSocket to connect first
-            setTimeout(() => validateSession(), 2000)
+            setTimeout(() => validateSession(), 5000)
           }
         } catch (e) {
           console.error('Failed to restore session:', e)
@@ -1590,12 +1607,13 @@
         }
       }
 
+      // Check session every 5 minutes instead of every minute
       const sessionInterval = setInterval(() => {
         if (isLoggedIn) {
           validateSession()
           fetchGroups()
         }
-      }, 60000)
+      }, 300000)
 
       return () => {
         document.removeEventListener('visibilitychange', handleVisibilityChange)
