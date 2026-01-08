@@ -7,8 +7,6 @@ import (
 
 	"bytechat/models" // adjust import path
 	"bytechat/storage"
-
-	"github.com/gorilla/websocket"
 )
 
 type GroupMessage struct {
@@ -24,10 +22,10 @@ type GroupMessage struct {
 }
 
 // HandleGroupCreate creates a new group chat
-func HandleGroupCreate(msg []byte, from string, conn *websocket.Conn, broadcast chan interface{}) error {
+func HandleGroupCreate(msg []byte, from string) (*GroupMessage, error) {
 	var groupMsg GroupMessage
 	if err := json.Unmarshal(msg, &groupMsg); err != nil {
-		return fmt.Errorf("invalid group-create message: %w", err)
+		return nil, fmt.Errorf("invalid group-create message: %w", err)
 	}
 
 	groupID := fmt.Sprintf("group_%s_%d", from, time.Now().UnixNano())
@@ -47,7 +45,7 @@ func HandleGroupCreate(msg []byte, from string, conn *websocket.Conn, broadcast 
 
 	// Save group to storage
 	if err := storage.SaveGroup(groupID, group); err != nil {
-		return fmt.Errorf("failed to save group: %w", err)
+		return nil, fmt.Errorf("failed to save group: %w", err)
 	}
 
 	// Broadcast group created message to all members
@@ -60,12 +58,11 @@ func HandleGroupCreate(msg []byte, from string, conn *websocket.Conn, broadcast 
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	broadcast <- response
-	return nil
+	return &response, nil
 }
 
 // HandleGroupUpdate updates group settings
-func HandleGroupUpdate(msg []byte, from string, conn *websocket.Conn, broadcast chan interface{}) error {
+func HandleGroupUpdate(msg []byte, from string) (*GroupMessage, error) {
 	var update struct {
 		GroupID     string `json:"groupId"`
 		Name        string `json:"name,omitempty"`
@@ -73,17 +70,17 @@ func HandleGroupUpdate(msg []byte, from string, conn *websocket.Conn, broadcast 
 	}
 
 	if err := json.Unmarshal(msg, &update); err != nil {
-		return fmt.Errorf("invalid group-update message: %w", err)
+		return nil, fmt.Errorf("invalid group-update message: %w", err)
 	}
 
 	// Verify user is group admin
 	group, err := storage.GetGroup(update.GroupID)
 	if err != nil {
-		return fmt.Errorf("group not found: %w", err)
+		return nil, fmt.Errorf("group not found: %w", err)
 	}
 
 	if group.Owner != from && !contains(group.Admins, from) {
-		return fmt.Errorf("unauthorized: only admins can update group")
+		return nil, fmt.Errorf("unauthorized: only admins can update group")
 	}
 
 	// Update group
@@ -95,7 +92,7 @@ func HandleGroupUpdate(msg []byte, from string, conn *websocket.Conn, broadcast 
 	}
 
 	if err := storage.SaveGroup(update.GroupID, *group); err != nil {
-		return fmt.Errorf("failed to save group: %w", err)
+		return nil, fmt.Errorf("failed to save group: %w", err)
 	}
 
 	// Broadcast update to group members
@@ -104,46 +101,46 @@ func HandleGroupUpdate(msg []byte, from string, conn *websocket.Conn, broadcast 
 		GroupID:   update.GroupID,
 		GroupName: group.Name,
 		From:      from,
+		Members:   group.Members,
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	broadcast <- response
-	return nil
+	return &response, nil
 }
 
 // HandleAddGroupMember adds a member to a group
-func HandleAddGroupMember(msg []byte, from string, conn *websocket.Conn, broadcast chan interface{}) error {
+func HandleAddGroupMember(msg []byte, from string) (*GroupMessage, error) {
 	var add struct {
 		GroupID string `json:"groupId"`
 		UserID  string `json:"userId"`
 	}
 
 	if err := json.Unmarshal(msg, &add); err != nil {
-		return fmt.Errorf("invalid member-add message: %w", err)
+		return nil, fmt.Errorf("invalid member-add message: %w", err)
 	}
 
 	group, err := storage.GetGroup(add.GroupID)
 	if err != nil {
-		return fmt.Errorf("group not found: %w", err)
+		return nil, fmt.Errorf("group not found: %w", err)
 	}
 
 	// Check permissions
 	if group.Owner != from && !contains(group.Admins, from) {
 		// If member invites disabled, reject
 		if !group.Settings.AllowMemberInvite {
-			return fmt.Errorf("unauthorized: members cannot invite")
+			return nil, fmt.Errorf("unauthorized: members cannot invite")
 		}
 	}
 
 	// Check if already member
 	if contains(group.Members, add.UserID) {
-		return fmt.Errorf("user already in group")
+		return nil, fmt.Errorf("user already in group")
 	}
 
 	// Add member
 	group.Members = append(group.Members, add.UserID)
 	if err := storage.SaveGroup(add.GroupID, *group); err != nil {
-		return fmt.Errorf("failed to save group: %w", err)
+		return nil, fmt.Errorf("failed to save group: %w", err)
 	}
 
 	response := GroupMessage{
@@ -156,29 +153,28 @@ func HandleAddGroupMember(msg []byte, from string, conn *websocket.Conn, broadca
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	broadcast <- response
-	return nil
+	return &response, nil
 }
 
 // HandleRemoveGroupMember removes a member from a group
-func HandleRemoveGroupMember(msg []byte, from string, conn *websocket.Conn, broadcast chan interface{}) error {
+func HandleRemoveGroupMember(msg []byte, from string) (*GroupMessage, error) {
 	var remove struct {
 		GroupID string `json:"groupId"`
 		UserID  string `json:"userId"`
 	}
 
 	if err := json.Unmarshal(msg, &remove); err != nil {
-		return fmt.Errorf("invalid member-remove message: %w", err)
+		return nil, fmt.Errorf("invalid member-remove message: %w", err)
 	}
 
 	group, err := storage.GetGroup(remove.GroupID)
 	if err != nil {
-		return fmt.Errorf("group not found: %w", err)
+		return nil, fmt.Errorf("group not found: %w", err)
 	}
 
 	// Only owner and admins can remove
 	if group.Owner != from && !contains(group.Admins, from) {
-		return fmt.Errorf("unauthorized: only admins can remove members")
+		return nil, fmt.Errorf("unauthorized: only admins can remove members")
 	}
 
 	// Remove member
@@ -186,7 +182,7 @@ func HandleRemoveGroupMember(msg []byte, from string, conn *websocket.Conn, broa
 	group.Admins = removeFrom(group.Admins, remove.UserID) // Also remove from admins if applicable
 
 	if err := storage.SaveGroup(remove.GroupID, *group); err != nil {
-		return fmt.Errorf("failed to save group: %w", err)
+		return nil, fmt.Errorf("failed to save group: %w", err)
 	}
 
 	response := GroupMessage{
@@ -199,41 +195,40 @@ func HandleRemoveGroupMember(msg []byte, from string, conn *websocket.Conn, broa
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	broadcast <- response
-	return nil
+	return &response, nil
 }
 
 // HandlePromoteAdmin promotes a member to admin
-func HandlePromoteAdmin(msg []byte, from string, conn *websocket.Conn, broadcast chan interface{}) error {
+func HandlePromoteAdmin(msg []byte, from string) (*GroupMessage, error) {
 	var promote struct {
 		GroupID string `json:"groupId"`
 		UserID  string `json:"userId"`
 	}
 
 	if err := json.Unmarshal(msg, &promote); err != nil {
-		return fmt.Errorf("invalid promote message: %w", err)
+		return nil, fmt.Errorf("invalid promote message: %w", err)
 	}
 
 	group, err := storage.GetGroup(promote.GroupID)
 	if err != nil {
-		return fmt.Errorf("group not found: %w", err)
+		return nil, fmt.Errorf("group not found: %w", err)
 	}
 
 	// Only owner can promote
 	if group.Owner != from {
-		return fmt.Errorf("unauthorized: only owner can promote admins")
+		return nil, fmt.Errorf("unauthorized: only owner can promote admins")
 	}
 
 	// Check if member exists
 	if !contains(group.Members, promote.UserID) {
-		return fmt.Errorf("user not in group")
+		return nil, fmt.Errorf("user not in group")
 	}
 
 	// Promote if not already admin
 	if !contains(group.Admins, promote.UserID) {
 		group.Admins = append(group.Admins, promote.UserID)
 		if err := storage.SaveGroup(promote.GroupID, *group); err != nil {
-			return fmt.Errorf("failed to save group: %w", err)
+			return nil, fmt.Errorf("failed to save group: %w", err)
 		}
 	}
 
@@ -243,47 +238,47 @@ func HandlePromoteAdmin(msg []byte, from string, conn *websocket.Conn, broadcast
 		Action:    "member-promoted",
 		TargetID:  promote.UserID,
 		From:      from,
+		Members:   group.Members,
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	broadcast <- response
-	return nil
+	return &response, nil
 }
 
 // HandleDeleteGroup deletes a group (owner only)
-func HandleDeleteGroup(msg []byte, from string, conn *websocket.Conn, broadcast chan interface{}) error {
+func HandleDeleteGroup(msg []byte, from string) (*GroupMessage, error) {
 	var delete struct {
 		GroupID string `json:"groupId"`
 	}
 
 	if err := json.Unmarshal(msg, &delete); err != nil {
-		return fmt.Errorf("invalid delete message: %w", err)
+		return nil, fmt.Errorf("invalid delete message: %w", err)
 	}
 
 	group, err := storage.GetGroup(delete.GroupID)
 	if err != nil {
-		return fmt.Errorf("group not found: %w", err)
+		return nil, fmt.Errorf("group not found: %w", err)
 	}
 
 	// Only owner can delete
 	if group.Owner != from {
-		return fmt.Errorf("unauthorized: only owner can delete group")
+		return nil, fmt.Errorf("unauthorized: only owner can delete group")
 	}
 
 	// Delete group
 	if err := storage.DeleteGroup(delete.GroupID); err != nil {
-		return fmt.Errorf("failed to delete group: %w", err)
+		return nil, fmt.Errorf("failed to delete group: %w", err)
 	}
 
 	response := GroupMessage{
 		Type:      "group-deleted",
 		GroupID:   delete.GroupID,
 		From:      from,
+		Members:   group.Members,
 		Timestamp: time.Now().UnixMilli(),
 	}
 
-	broadcast <- response
-	return nil
+	return &response, nil
 }
 
 // Helper functions

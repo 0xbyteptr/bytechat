@@ -18,6 +18,7 @@
   import * as SessionLib from './lib/useSession'
   import * as MessagesLib from './lib/useMessages'
   import * as ContactsLib from './lib/useContacts'
+  import { updateContactsList } from './lib/useContacts'
   import * as UpdatesLib from './lib/useUpdates'
   import * as FileHandlingLib from './lib/useFileHandling'
   import * as MessageCacheLib from './lib/useMessageCache'
@@ -38,6 +39,8 @@
   import { createSessionService } from './lib/useSessionService'
   import { createUIStateService } from './lib/useUIStateService'
   import { createGroupService } from './lib/useGroupService'
+  import { createStatusService } from './lib/useStatusService'
+  import { useUserStatus } from './lib/useUserStatus'
 
   const API_URL = import.meta.env.VITE_API_URL || 'https://api.byteptr.xyz'
   const version = pkg.version
@@ -171,6 +174,17 @@
   let sessionService: any = null
   let uiStateService: any = null
   let groupService: any = null
+  let statusService: any = null
+  
+  // Status management
+  const { state: userStatusState } = useUserStatus()
+  let currentUserStatus = 'online'
+  let currentCustomMessage = ''
+  
+  $: if ($userStatusState) {
+    currentUserStatus = $userStatusState.status
+    currentCustomMessage = $userStatusState.customMessage
+  }
   
   // Subscribe to stores
   VoipLib.callState.subscribe(value => callState = value)
@@ -187,6 +201,9 @@
   ContactsLib.contacts.subscribe(value => contacts = value)
   
   ContactsLib.onlineUsers.subscribe(value => onlineUsers = value)
+
+  // Derive sidebar contact list from messages, unread counts, and group membership
+  $: updateContactsList(messagesMap, unreadMap, groups)
   
   SessionLib.id.subscribe(value => id = value)
   SessionLib.sessionToken.subscribe(value => sessionToken = value)
@@ -331,6 +348,9 @@
   }
 
   $: currentMessages = contact ? (messagesMap[contact] || []) : []
+  $: if (currentMessages.length > 0) {
+    console.log('[App] currentMessages updated:', { contact, count: currentMessages.length, latest: currentMessages[currentMessages.length - 1]?.text?.substring(0, 30) })
+  }
 
   $: if (contact) {
     showSidebar = false
@@ -416,6 +436,7 @@
     sessionService = createSessionService({ API_URL, sessionToken })
     groupService = createGroupService({ API_URL, id, sessionToken })
     settingsService = createSettingsService({ id, API_URL, sessionToken, uploadFile, loadProfile: (userId: string) => profileService?.loadProfile(userId) })
+    statusService = createStatusService({ API_URL, sessionToken, userId: id })
     
     // Establish WebSocket connection first
     ws = connectWS(id, sessionToken, async (msg)=>{
@@ -424,6 +445,20 @@
         const newOnlineUsers: any = new Set(msg.online || [])
         console.log('Presence update:', Array.from(newOnlineUsers))
         ContactsLib.onlineUsers.set(newOnlineUsers)
+        return
+      }
+      
+      // Handle status updates
+      if (msg.type === 'status-update') {
+        console.log('Status update from', msg.from, ':', msg.status)
+        // Update profile cache with new status
+        const profile = { ...profiles[msg.from] }
+        if (profile) {
+          profile.status = msg.status
+          profile.customMessage = msg.customMessage
+          profile.lastSeen = msg.lastSeen
+          profiles = { ...profiles, [msg.from]: profile }
+        }
         return
       }
       
@@ -549,6 +584,8 @@
         return
       }
       
+      console.log('[App.handleMessage] Processing:', { messageId: msg.messageId, from, chatWith, currentContact: contact, isForCurrentChat: chatWith === contact })
+      
       try {
         const fetchKey = async (targetId: string) => {
           if (pendingKeys.has(targetId)) {
@@ -600,44 +637,69 @@
             nonce = msg.groupCiphers[id].nonce
           }
 
+          console.log('[Decrypt] Attempting decryption:', {
+            messageId: msg.messageId,
+            from: msg.from,
+            hasCipher: !!cipher,
+            cipherLength: typeof cipher === 'string' ? cipher.length : 'not a string',
+            hasNonce: !!nonce,
+            nonceLength: typeof nonce === 'string' ? nonce.length : 'not a string',
+            hasGroupCiphers: !!msg.groupCiphers,
+            decryptPkName,
+            pkLength: pk.length
+          })
+
           // Validate we have all required string parameters
           if (!cipher || !nonce || typeof cipher !== 'string' || typeof nonce !== 'string') {
-            if (cipher || nonce) {
-              console.warn('Invalid cipher/nonce types:', { 
-                cipher: typeof cipher, 
-                nonce: typeof nonce, 
-                messageId: msg.messageId 
-              })
-            }
+            console.error('Invalid cipher/nonce for decryption:', { 
+              cipher: typeof cipher, 
+              nonce: typeof nonce, 
+              messageId: msg.messageId,
+              from: msg.from
+            })
             return null
           }
 
           // Use worker pool to prevent UI blocking
           if (keypair && pk) {
             try {
-              return await cryptoPool.decrypt(keypair.secretKey, pk, cipher, nonce)
+              const result = await cryptoPool.decrypt(keypair.secretKey, pk, cipher, nonce)
+              console.log('[Decrypt] Decryption successful:', { messageId: msg.messageId, from: msg.from })
+              return result
             } catch (e) {
-              console.warn('Worker decryption failed, trying fallback', e)
-              return decrypt(keypair.secretKey, pk, cipher, nonce)
+              console.warn('Worker decryption failed, trying fallback', { error: String(e), messageId: msg.messageId })
+              try {
+                const result = decrypt(keypair.secretKey, pk, cipher, nonce)
+                console.log('[Decrypt] Fallback decryption successful:', { messageId: msg.messageId, from: msg.from })
+                return result
+              } catch (e2) {
+                console.error('Fallback decryption also failed:', { error: String(e2), messageId: msg.messageId, from: msg.from })
+                return null
+              }
             }
           }
+          console.error('Cannot decrypt - missing keypair or pk:', { hasKeypair: !!keypair, hasPk: !!pk })
           return null
         }
 
         text = await attemptDecrypt(decryptPk) || ''
+        console.log('[Decrypt] After first attempt:', { success: !!text, messageId: msg.messageId, from: msg.from })
 
         // If decryption failed, try fetching the key again (it might have changed)
         if (!text && (msg.cipher || msg.groupCiphers) && !msg.cipher?.includes('typing')) {
+          console.log('[Decrypt] Retrying with fresh key fetch:', { decryptPkName, messageId: msg.messageId })
           // Force a re-fetch if decryption failed
           keys = { ...keys }
           delete keys[decryptPkName] 
           const newPk = await fetchKey(decryptPkName)
           if (newPk && newPk !== decryptPk) {
+            console.log('[Decrypt] Got new key, retrying:', { messageId: msg.messageId })
             text = await attemptDecrypt(newPk) || ''
           }
         }
 
         if (!text) {
+          console.error('[Decrypt] Message failed to decrypt:', { messageId: msg.messageId, from: msg.from, messageType: msg.type })
           text = '<failed to decrypt message>'
         }
         
@@ -678,14 +740,19 @@
           }
         }
 
-        console.log('Processing message:', { messageId: msgObj.messageId, from: msgObj.from, text: msgObj.text?.substring(0, 50) })
+        console.log('Processing message:', { messageId: msgObj.messageId, from: msgObj.from, text: msgObj.text?.substring(0, 50), isHistory: msg.isHistory })
 
         // Use requestIdleCallback for non-urgent UI updates
         const updateMessages = () => {
+          console.log('[App] Updating messagesMap with received message:', { messageId: msgObj.messageId, chatWith, from: msgObj.from })
           const nextList = [...(messagesMap[chatWith]||[]), msgObj].sort((a, b) => (a.ts || 0) - (b.ts || 0))
           messagesMap = {
             ...messagesMap,
             [chatWith]: capMessages(nextList)
+          }
+          // Force reactivity by reassigning currentMessages if this is the current contact
+          if (chatWith === contact) {
+            currentMessages = messagesMap[contact] || []
           }
           // Cache the message
           MessageCacheLib.cacheMessage(chatWith, msgObj).catch(err => console.warn('Failed to cache message:', err))
@@ -693,6 +760,7 @@
         
         // For history messages, defer to idle time
         if (msg.isHistory) {
+          console.log('[App] Deferring history message to idle time')
           if ('requestIdleCallback' in window) {
             requestIdleCallback(() => updateMessages(), { timeout: 1000 })
           } else {
@@ -702,6 +770,7 @@
         }
         
         // For live messages, update immediately
+        console.log('[App] Updating live message immediately')
         updateMessages()
 
         const pref = notificationPrefs[chatWith] || 'all'
@@ -1603,7 +1672,7 @@
     border: 1px solid var(--surface-lighter);
     border-radius: 24px;
     width: 100%;
-    max-width: 450px;
+    max-width: 840px;
     padding: 2rem;
     box-shadow: 0 20px 40px rgba(0,0,0,0.4);
     display: flex;
@@ -1614,6 +1683,56 @@
     -webkit-overflow-scrolling: touchex;
     flex-direction: column;
     gap: 1.5rem;
+  }
+  .settings-layout {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    gap: 1rem;
+  }
+
+  .settings-nav {
+    background: var(--bg);
+    border: 1px solid var(--surface-lighter);
+    border-radius: 12px;
+    padding: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .settings-nav-item {
+    border: none;
+    min-height: 40px;
+    -webkit-tap-highlight-color: transparent;
+    font-size: 0.85rem;
+    background: transparent;
+    color: var(--subtext);
+    padding: 0.5rem 0.6rem;
+    border-radius: 10px;
+    cursor: pointer;
+    font-weight: 700;
+    transition: all 0.15s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .settings-nav-item:hover {
+    background: var(--surface-lighter);
+    color: var(--fg);
+  }
+
+  .settings-nav-item.active,
+  .settings-nav-item[aria-selected="true"] {
+    background: var(--accent);
+    color: var(--accent-fg);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+  }
+
+  .settings-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
   }
 
   .modal-header {
@@ -1828,6 +1947,40 @@
     transition: opacity 0.2s;
   }
 
+  .status-selector-inline {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .status-select {
+    background: var(--bg);
+    border: 1px solid var(--surface-lighter);
+    border-radius: 8px;
+    padding: 0.75rem;
+    color: var(--fg);
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a1a1a1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 0.75rem center;
+    background-size: 1.2em 1.2em;
+    padding-right: 2.5rem;
+  }
+
+  .status-select:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .status-select:hover {
+    background-color: var(--surface-lighter);
+  }
+
   @media (max-width: 768px) {
     .sidebar-wrapper {
       width: 100%;
@@ -1870,15 +2023,16 @@
       font-size: 1.25rem;
     }
     
-    .settings-tabs {
-      grid-template-columns: repeat(2, 1fr);
-      gap: 0.4rem;
-      padding: 0.25rem;
+    .settings-layout {
+      grid-template-columns: 1fr;
     }
-    
-    .settings-tab {
+    .settings-nav {
+      flex-direction: row;
+      gap: 0.35rem;
+    }
+    .settings-nav-item {
       font-size: 0.75rem;
-      padding: 0.5rem 0.5rem;
+      padding: 0.45rem 0.55rem;
       white-space: nowrap;
     }
     
@@ -2008,8 +2162,18 @@
               pinned={pinnedMap[contact] || []}
               notificationMode={notificationPrefs[contact] || 'all'}
               on:send={(e) => {
-                console.log('Send event fired', { messagingService: !!messagingService, ws: !!ws, detail: e.detail })
-                messagingService?.sendTo(e.detail.to, e.detail.text, e.detail.replyTo)
+                console.log('===== SEND EVENT FIRED =====', { to: e.detail.to, hasMessagingService: !!messagingService })
+                if (!messagingService) {
+                  console.error('[SEND] Messaging service NOT initialized', { ws: !!ws, id, keypair: !!keypair })
+                  console.log('[SEND] messagingService object:', messagingService)
+                  return
+                }
+                if (!ws || ws.readyState !== WebSocket.OPEN) {
+                  console.error('[SEND] WebSocket not connected', { ws: !!ws, readyState: ws?.readyState })
+                  return
+                }
+                console.log('[SEND] Calling messagingService.sendTo', { to: e.detail.to, text: e.detail.text?.substring(0, 30) })
+                messagingService.sendTo(e.detail.to, e.detail.text, e.detail.replyTo)
               }}
               on:sendFile={(e) => messagingService?.sendFile(e.detail.to, e.detail.fileData, e.detail.fileName, e.detail.fileType)}
               on:sendVoice={(e) => messagingService?.sendVoice(e.detail.to, e.detail.audioBlob, e.detail.duration)}
@@ -2046,23 +2210,31 @@
         role="button"
         tabindex="-1"
       >
-        <div class="modal-content">
+        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="settings-title">
           <header class="modal-header">
-            <h2 class="modal-title">Settings</h2>
+            <h2 class="modal-title" id="settings-title">Settings</h2>
             <button class="close-btn" on:click={() => (showSettings = false)}>
               <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.5">
                 <path d="M18 6L6 18M6 6l12 12" />
               </svg>
             </button>
           </header>
-
-          <div class="settings-tabs" role="tablist">
-            <button class="settings-tab" class:active={settingsTab === 'general'} on:click={() => (settingsTab = 'general')} role="tab">General</button>
-            <button class="settings-tab" class:active={settingsTab === 'profile'} on:click={() => (settingsTab = 'profile')} role="tab">Profile</button>
-            <button class="settings-tab" class:active={settingsTab === 'notifications'} on:click={() => (settingsTab = 'notifications')} role="tab">Notifications</button>
-            <button class="settings-tab" class:active={settingsTab === 'security'} on:click={() => (settingsTab = 'security')} role="tab">Security</button>
-          </div>
-
+          <div class="settings-layout">
+            <div class="settings-nav" role="tablist" aria-orientation="vertical">
+              <button class="settings-nav-item" aria-selected={settingsTab === 'general'} class:active={settingsTab === 'general'} on:click={() => (settingsTab = 'general')} role="tab">
+                <span class="nav-icon">⚙️</span><span>General</span>
+              </button>
+              <button class="settings-nav-item" aria-selected={settingsTab === 'profile'} class:active={settingsTab === 'profile'} on:click={() => (settingsTab = 'profile')} role="tab">
+                <span class="nav-icon">👤</span><span>Profile</span>
+              </button>
+              <button class="settings-nav-item" aria-selected={settingsTab === 'notifications'} class:active={settingsTab === 'notifications'} on:click={() => (settingsTab = 'notifications')} role="tab">
+                <span class="nav-icon">🔔</span><span>Notifications</span>
+              </button>
+              <button class="settings-nav-item" aria-selected={settingsTab === 'security'} class:active={settingsTab === 'security'} on:click={() => (settingsTab = 'security')} role="tab">
+                <span class="nav-icon">🔐</span><span>Security</span>
+              </button>
+            </div>
+            <section class="settings-panel">
           {#if settingsTab === 'general'}
             <div class="settings-section">
               <span class="settings-label">Account</span>
@@ -2097,6 +2269,30 @@
           {:else if settingsTab === 'profile'}
             <div class="settings-section">
               <span class="settings-label">Profile</span>
+              
+              <!-- User Status Section -->
+              <div class="settings-item">
+                <label for="status-select" class="settings-sub-label">Status</label>
+                <div class="status-selector-inline">
+                  <select id="status-select" bind:value={currentUserStatus} class="status-select" on:change={() => statusService?.updateStatus(currentUserStatus, currentCustomMessage)}>
+                    <option value="online">🟢 Online</option>
+                    <option value="away">🟡 Away</option>
+                    <option value="busy">🔴 Busy</option>
+                    <option value="offline">⚫ Offline</option>
+                  </select>
+                </div>
+                <label for="custom-message-input" class="settings-sub-label" style="margin-top: 1rem">Custom Message</label>
+                <input
+                  id="custom-message-input"
+                  class="settings-input"
+                  type="text"
+                  placeholder="What's on your mind?"
+                  bind:value={currentCustomMessage}
+                  maxlength="100"
+                  on:blur={() => statusService?.updateStatus(currentUserStatus, currentCustomMessage)}
+                />
+              </div>
+              
               {#if settingsProfileLoading || profileLoading}
                 <div class="settings-item">Loading profile...</div>
               {:else}
@@ -2238,6 +2434,8 @@
               </div>
             </div>
           {/if}
+            </section>
+          </div>
         </div>
       </div>
     {/if}

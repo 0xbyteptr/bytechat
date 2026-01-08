@@ -8,6 +8,7 @@
     text: string; 
     ts?: number;
     messageId?: string;
+    status?: 'sending' | 'sent' | 'failed';
     file?: { fileName: string; fileType: string; fileData?: string; fileUrl?: string };
     editedAt?: number;
     deleted?: boolean;
@@ -314,7 +315,7 @@
         ></audio>
       </div>
     {:else}
-      <div class="text">{@html renderMarkdown(parseEmoji(msg.text))}</div>
+      <div class="text" class:sending={msg.status === 'sending'} class:failed={msg.status === 'failed'}>{@html renderMarkdown(parseEmoji(msg.text))}</div>
       {#if previewData}
         {#if embed && embed.type === 'youtube'}
           <div class="embed-card">
@@ -883,5 +884,15 @@
 
   .status {
     font-weight: 800;
+  }
+
+  .text.sending {
+    opacity: 0.6;
+    color: var(--text-secondary);
+  }
+
+  .text.failed {
+    opacity: 0.5;
+    color: var(--error, #ef4444);
   }
 </style>

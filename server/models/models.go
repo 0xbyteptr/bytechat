@@ -37,10 +37,13 @@ type Group struct {
 
 // Profile represents a user's public profile metadata
 type Profile struct {
-	ID          string    `json:"id"`
-	DisplayName string    `json:"displayName,omitempty"`
-	Bio         string    `json:"bio,omitempty"`
-	AvatarURL   string    `json:"avatarUrl,omitempty"`
-	BannerURL   string    `json:"bannerUrl,omitempty"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ID            string    `json:"id"`
+	DisplayName   string    `json:"displayName,omitempty"`
+	Bio           string    `json:"bio,omitempty"`
+	AvatarURL     string    `json:"avatarUrl,omitempty"`
+	BannerURL     string    `json:"bannerUrl,omitempty"`
+	Status        string    `json:"status,omitempty"` // online, away, busy, offline
+	CustomMessage string    `json:"customMessage,omitempty"`
+	LastSeen      int64     `json:"lastSeen,omitempty"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }

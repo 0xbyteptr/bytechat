@@ -7,6 +7,9 @@ export interface SettingsProfile {
   bio: string
   avatarUrl: string
   bannerUrl: string
+  status?: string
+  customMessage?: string
+  lastSeen?: number
 }
 
 export interface SettingsServiceContext {

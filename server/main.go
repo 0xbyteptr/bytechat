@@ -112,6 +112,7 @@ func main() {
 	mux.HandleFunc("/push-token", auth.PushTokenHandler)
 	mux.HandleFunc("/groups", groups.Handler)
 	mux.HandleFunc("/profile", profile.Handler)
+	mux.HandleFunc("/profile/status", profile.StatusHandler)
 	mux.HandleFunc("/validate-session", auth.ValidateSessionHandler)
 	mux.HandleFunc("/cdn/upload", cdn.UploadHandler)
 	mux.HandleFunc("/cdn/file/", cdn.DownloadHandler)

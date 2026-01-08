@@ -11,7 +11,7 @@
   export let onlineUsers: Set<string> = new Set()
   export let userProfile: { displayName?: string; avatarUrl?: string; bannerUrl?: string; bio?: string; z?: string } | null = null
   export let userId = ''
-  export let profiles: Record<string, { displayName?: string; avatarUrl?: string; bannerUrl?: string; bio?: string }> = {}
+  export let profiles: Record<string, { displayName?: string; avatarUrl?: string; bannerUrl?: string; bio?: string; status?: string; customMessage?: string; lastSeen?: number }> = {}
 
   $: if (onlineUsers && onlineUsers.size >= 0) {
     console.log('Sidebar received onlineUsers:', Array.from(onlineUsers))
@@ -192,7 +192,14 @@
                 <span class="unread-badge">{c.unread}</span>
               {/if}
             </div>
-            <div class="contact-last">{c.last || 'No messages yet'}</div>
+            {#if profiles[c.id]?.customMessage}
+              <div class="custom-status" title={profiles[c.id].customMessage}>
+                <span class="status-emoji">{profiles[c.id]?.status === 'online' ? '🟢' : profiles[c.id]?.status === 'away' ? '🟡' : profiles[c.id]?.status === 'busy' ? '🔴' : '⚫'}</span>
+                <span class="status-text">{profiles[c.id].customMessage}</span>
+              </div>
+            {:else}
+              <div class="contact-last">{c.last || 'No messages yet'}</div>
+            {/if}
           </div>
         </button>
       {/each}
@@ -623,6 +630,31 @@
 
   .contact-item.active .contact-last {
     color: rgba(255,255,255,0.7);
+  }
+
+  .custom-status {
+    font-size: 0.75rem;
+    color: var(--subtext);
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .contact-item.active .custom-status {
+    color: rgba(255,255,255,0.7);
+  }
+
+  .status-emoji {
+    font-size: 0.65rem;
+    flex-shrink: 0;
+  }
+
+  .status-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .sidebar-footer {

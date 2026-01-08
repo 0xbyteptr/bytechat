@@ -9,14 +9,14 @@
   export let currentUserId: string
   export let contactId: string | null = null
   export let contactName: string | null = null
-  export let contactProfile: { displayName?: string; avatarUrl?: string; bannerUrl?: string } | null = null
+  export let contactProfile: { displayName?: string; avatarUrl?: string; bannerUrl?: string; status?: string; customMessage?: string; lastSeen?: number } | null = null
   export let isSending = false
   export let callState: 'idle' | 'calling' | 'ringing' | 'connecting' | 'connected' | 'ended' = 'idle'
   export let isMuted = false
   export let isOnline = false
   export let isGroup = false
   export let notificationMode: 'all' | 'mentions' | 'mute' = 'all'
-  export let group: any = null
+  export const group: any = null
   interface Message {
     from: string;
     text: string;
@@ -48,6 +48,11 @@
   let isUploading = false
   let uploadName = ''
   let listEl: HTMLDivElement | null = null
+  
+  // Log message updates for debugging
+  $: if (messages.length > 0) {
+    console.log('[ChatWindow] Messages updated:', { count: messages.length, latest: messages[messages.length - 1]?.text?.substring(0, 30) })
+  }
   let textareaEl: HTMLTextAreaElement
   let editingMessage: Message | null = null
   let replyingTo: Message | null = null
@@ -100,9 +105,14 @@
 
   afterUpdate(async () => {
     // Auto-scroll to bottom when new messages arrive
-    if (listEl && messages.length > prevMessageCount && shouldAutoScroll) {
-      await tick()
-      listEl.scrollTop = listEl.scrollHeight
+    if (listEl) {
+      console.log('[ChatWindow afterUpdate] messages:', { count: messages.length, prevCount: prevMessageCount, shouldAutoScroll, scrollHeight: listEl.scrollHeight, clientHeight: listEl.clientHeight })
+      if (messages.length > prevMessageCount && shouldAutoScroll) {
+        console.log('[ChatWindow] Auto-scrolling to bottom')
+        await tick()
+        listEl.scrollTop = listEl.scrollHeight
+        console.log('[ChatWindow] Scrolled to:', listEl.scrollTop)
+      }
     }
     prevMessageCount = messages.length
   })
@@ -336,6 +346,11 @@
         <div class="status">
           {#if isTyping}
             <span class="typing-indicator">typing...</span>
+          {:else if contactProfile?.customMessage}
+            <span class="custom-status-text">
+              <span class="status-emoji">{contactProfile?.status === 'online' ? '🟢' : contactProfile?.status === 'away' ? '🟡' : contactProfile?.status === 'busy' ? '🔴' : '⚫'}</span>
+              {contactProfile.customMessage}
+            </span>
           {:else}
             <span class="status-dot" class:online={isOnline}></span>
             <span class="online-text" class:online={isOnline}>{isOnline ? 'online' : 'offline'}</span>
@@ -690,6 +705,19 @@
   .online-text.online {
     color: var(--green);
     font-weight: 600;
+  }
+
+  .custom-status-text {
+    color: var(--subtext);
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .status-emoji {
+    font-size: 0.75rem;
+    flex-shrink: 0;
   }
 
   .actions {

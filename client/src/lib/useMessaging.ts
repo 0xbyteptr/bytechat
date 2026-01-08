@@ -37,7 +37,21 @@ export function createMessagingService(context: MessagingContext) {
   }
 
   async function sendTo(to: string, text: string, replyTo?: { messageId: string; text: string; from: string }) {
-    if (!context.ws || context.ws.readyState !== WebSocket.OPEN || isSending) return
+    console.log('====== [sendTo] CALLED ======', { to, text: text?.substring(0, 30), isSending, wsReady: context.ws?.readyState === WebSocket.OPEN })
+    
+    // Pre-flight checks - NO early returns after this point
+    if (!context.ws) {
+      console.error('[sendTo] NO WEBSOCKET')
+      return
+    }
+    if (context.ws.readyState !== WebSocket.OPEN) {
+      console.error('[sendTo] WS NOT OPEN', { readyState: context.ws.readyState })
+      return
+    }
+    if (isSending) {
+      console.error('[sendTo] ALREADY SENDING')
+      return
+    }
 
     // Ensure text is a string
     if (typeof text !== 'string') {
@@ -46,75 +60,13 @@ export function createMessagingService(context: MessagingContext) {
     }
 
     isSending = true
-    // Defer to next tick to allow UI to update
-    await new Promise((resolve) => setTimeout(resolve, 10))
-
+    console.log('[sendTo] isSending set to true')
+    
     try {
       const messageId = Date.now() + '_' + Math.random().toString(36).slice(2, 11)
-      let payload: any = { to, messageId, replyTo }
-
-      if (to.startsWith('#')) {
-        const groups = context.getGroups()
-        const g = groups.find((x) => x.id === to)
-        if (!g) return
-
-        const groupCiphers: any = {}
-        const recipients: Record<string, string> = {}
-
-        for (const member of g.members) {
-          await context.fetchContactKey(member)
-          const keys = context.getKeys()
-          const mpk = keys[member]
-          if (mpk) recipients[member] = mpk
-        }
-
-        const keypair = context.getKeypair()
-        if (keypair && Object.keys(recipients).length > 0) {
-          try {
-            const encrypted = await context.cryptoPool.batchEncrypt(keypair.secretKey, recipients, text)
-            Object.assign(groupCiphers, encrypted)
-          } catch (e) {
-            console.warn('Batch encryption failed, using fallback', e)
-            for (const member of g.members) {
-              const keys = context.getKeys()
-              const mpk = keys[member]
-              if (!mpk) continue
-              const { cipher, nonce } = encrypt(keypair.secretKey, mpk, text)
-              groupCiphers[member] = { cipher, nonce }
-            }
-          }
-        }
-
-        payload.groupCiphers = groupCiphers
-      } else {
-        await context.fetchContactKey(to)
-        const keys = context.getKeys()
-        const pk = keys[to]
-        if (!pk) return
-
-        const keypair = context.getKeypair()
-        if (keypair) {
-          try {
-            const { cipher, nonce } = await context.cryptoPool.encrypt(keypair.secretKey, pk, text)
-            payload.cipher = cipher
-            payload.nonce = nonce
-          } catch (e) {
-            console.warn('Worker encryption failed, using fallback', e)
-            const { cipher, nonce } = encrypt(keypair.secretKey, pk, text)
-            payload.cipher = cipher
-            payload.nonce = nonce
-          }
-        } else {
-          alert('No encryption key available for this contact')
-          return
-        }
-      }
-
-      context.ws.send(JSON.stringify({ type: 'message', ...payload }))
-      
-      // Trigger Svelte reactivity by using the update callback
-      const newMessage = { from: context.id, text, ts: Date.now(), messageId, replyTo, sent: true }
-      console.log('Adding local message:', { messageId, to, text: text.substring(0, 50) })
+      // Add local message optimistically first
+      const newMessage = { from: context.id, text, ts: Date.now(), messageId, replyTo, status: 'sending' as const }
+      console.log('Adding local message optimistically:', { messageId, to, text: text.substring(0, 50) })
       context.updateMessagesMap((currentMap) => {
         const updatedMap = {
           ...currentMap,
@@ -123,8 +75,177 @@ export function createMessagingService(context: MessagingContext) {
         console.log('Updated messagesMap:', { to, count: updatedMap[to]?.length })
         return updatedMap
       })
+
+      let payload: any = { to, messageId, replyTo }
+
+      if (to.startsWith('#')) {
+        const groups = context.getGroups()
+        const g = groups.find((x) => x.id === to)
+        if (!g) {
+          console.error(`Group ${to} not found`)
+          // Mark message as failed
+          context.updateMessagesMap((currentMap) => {
+            const messages = currentMap[to] || []
+            return {
+              ...currentMap,
+              [to]: messages.map(m => 
+                m.messageId === messageId 
+                  ? { ...m, status: 'failed' as const }
+                  : m
+              )
+            }
+          })
+          return
+        }
+
+        const groupCiphers: any = {}
+        const recipients: Record<string, string> = {}
+
+        for (const member of g.members) {
+          const keys = context.getKeys()
+          let mpk = keys[member]
+          
+          // Only fetch if we don't have the key cached
+          if (!mpk) {
+            console.log(`Key not cached for group member ${member}, fetching...`)
+            await context.fetchContactKey(member)
+            mpk = context.getKeys()[member]
+          } else {
+            console.log(`Using cached key for group member ${member}`)
+          }
+          
+          if (mpk) {
+            recipients[member] = mpk
+            console.log(`Got key for ${member}`)
+          } else {
+            console.warn(`No key available for group member ${member}`)
+          }
+        }
+
+        const keypair = context.getKeypair()
+        if (keypair && Object.keys(recipients).length > 0) {
+          console.log(`Encrypting message for ${Object.keys(recipients).length} recipients using sync encryption`)
+          // Use sync encryption for speed
+          for (const member of Object.keys(recipients)) {
+            const { cipher, nonce } = encrypt(keypair.secretKey, recipients[member], text)
+            groupCiphers[member] = { cipher, nonce }
+          }
+          console.log(`Group message encryption completed`)
+        }
+
+        payload.groupCiphers = groupCiphers
+      } else {
+        const keys = context.getKeys()
+        let pk = keys[to]
+        
+        // Only fetch if we don't have the key cached
+        if (!pk) {
+          console.log(`Key not cached for ${to}, fetching...`)
+          await context.fetchContactKey(to)
+          pk = context.getKeys()[to]
+        } else {
+          console.log(`Using cached key for ${to}`)
+        }
+        
+        if (!pk) {
+          console.error(`Failed to get public key for ${to}`, { keysAvailable: Object.keys(keys).length, keys: Object.keys(keys) })
+          // Mark message as failed
+          context.updateMessagesMap((currentMap) => {
+            const messages = currentMap[to] || []
+            return {
+              ...currentMap,
+              [to]: messages.map(m => 
+                m.messageId === messageId 
+                  ? { ...m, status: 'failed' as const }
+                  : m
+              )
+            }
+          })
+          return
+        }
+
+        const keypair = context.getKeypair()
+        if (!keypair) {
+          console.error('No encryption keypair available')
+          // Mark message as failed
+          context.updateMessagesMap((currentMap) => {
+            const messages = currentMap[to] || []
+            return {
+              ...currentMap,
+              [to]: messages.map(m => 
+                m.messageId === messageId 
+                  ? { ...m, status: 'failed' as const }
+                  : m
+              )
+            }
+          })
+          return
+        }
+
+        console.log('Encrypting message with sync cipher')
+        // Use sync encryption for speed (faster than worker pool for single messages)
+        const { cipher, nonce } = encrypt(keypair.secretKey, pk, text)
+        payload.cipher = cipher
+        payload.nonce = nonce
+        console.log('Encryption completed')
+      }
+
+      // Verify WS is still open before sending
+      if (!context.ws || context.ws.readyState !== WebSocket.OPEN) {
+        console.error('[sendTo] WebSocket closed during encryption', { wsExists: !!context.ws, readyState: context.ws?.readyState })
+        // Mark message as failed
+        context.updateMessagesMap((currentMap) => {
+          const messages = currentMap[to] || []
+          return {
+            ...currentMap,
+            [to]: messages.map(m => 
+              m.messageId === messageId 
+                ? { ...m, status: 'failed' as const }
+                : m
+            )
+          }
+        })
+        return
+      }
+
+      console.log('Sending message payload', { to, messageId, hasGroupCiphers: !!payload.groupCiphers, hasCipher: !!payload.cipher })
+      try {
+        context.ws.send(JSON.stringify({ type: 'message', ...payload }))
+        console.log('Message sent successfully over WebSocket', { to, messageId })
+        
+        // Update message status to 'sent' after successful send
+        context.updateMessagesMap((currentMap) => {
+          const messages = currentMap[to] || []
+          return {
+            ...currentMap,
+            [to]: messages.map(m => 
+              m.messageId === messageId 
+                ? { ...m, status: 'sent' as const }
+                : m
+            )
+          }
+        })
+      } catch (e) {
+        console.error('Failed to send message over WebSocket', e)
+        
+        // Update message status to 'failed' on error
+        context.updateMessagesMap((currentMap) => {
+          const messages = currentMap[to] || []
+          return {
+            ...currentMap,
+            [to]: messages.map(m => 
+              m.messageId === messageId 
+                ? { ...m, status: 'failed' as const }
+                : m
+            )
+          }
+        })
+      }
+    } catch (e) {
+      console.error('Unexpected error in sendTo', e)
     } finally {
       isSending = false
+      console.log('[sendTo] isSending reset to false')
     }
   }
 

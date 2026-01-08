@@ -1,6 +1,7 @@
 /**
  * Contact and key management service
  */
+import * as ContactsLib from './useContacts'
 
 export interface ContactContext {
   API_URL: string
@@ -25,6 +26,8 @@ export function createContactService(context: ContactContext) {
       if (res.ok) {
         const data = await res.json()
         keyCache[name] = data.publicKey
+        // Sync to ContactsLib.keys store
+        ContactsLib.keys.update(k => ({ ...k, [name]: data.publicKey }))
         return data.publicKey
       } else {
         failedKeys.add(name)
@@ -49,6 +52,8 @@ export function createContactService(context: ContactContext) {
       if (res.ok) {
         const data = await res.json()
         keyCache[targetId] = data.publicKey
+        // Sync to ContactsLib.keys store
+        ContactsLib.keys.update(k => ({ ...k, [targetId]: data.publicKey }))
         return true
       } else {
         throw new Error(`User "${targetId}" not found on server.`)

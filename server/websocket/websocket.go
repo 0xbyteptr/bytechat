@@ -80,6 +80,15 @@ func BroadcastPresence() {
 	}
 }
 
+// BroadcastToAll sends a message to all connected clients
+func BroadcastToAll(msg map[string]interface{}) {
+	clientsMux.RLock()
+	defer clientsMux.RUnlock()
+	for _, client := range clients {
+		client.Send(msg)
+	}
+}
+
 func conversationID(a, b string) string {
 	// Groups use the group id as the stable conversation id
 	if strings.HasPrefix(a, "#") {
@@ -397,33 +406,45 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		if msgType, ok := msg["type"].(string); ok {
 			switch msgType {
 			case "group-create":
-				if err := groups.HandleGroupCreate(jsonMarshal(msg), id, conn, nil); err != nil {
+				if resp, err := groups.HandleGroupCreate(jsonMarshal(msg), id); err != nil {
 					log.Printf("group-create error: %v\n", err)
+				} else {
+					broadcastGroupEvent(resp, true)
 				}
 				continue
 			case "group-update":
-				if err := groups.HandleGroupUpdate(jsonMarshal(msg), id, conn, nil); err != nil {
+				if resp, err := groups.HandleGroupUpdate(jsonMarshal(msg), id); err != nil {
 					log.Printf("group-update error: %v\n", err)
+				} else {
+					broadcastGroupEvent(resp, true)
 				}
 				continue
 			case "member-add":
-				if err := groups.HandleAddGroupMember(jsonMarshal(msg), id, conn, nil); err != nil {
+				if resp, err := groups.HandleAddGroupMember(jsonMarshal(msg), id); err != nil {
 					log.Printf("member-add error: %v\n", err)
+				} else {
+					broadcastGroupEvent(resp, true)
 				}
 				continue
 			case "member-remove":
-				if err := groups.HandleRemoveGroupMember(jsonMarshal(msg), id, conn, nil); err != nil {
+				if resp, err := groups.HandleRemoveGroupMember(jsonMarshal(msg), id); err != nil {
 					log.Printf("member-remove error: %v\n", err)
+				} else {
+					broadcastGroupEvent(resp, true)
 				}
 				continue
 			case "member-promote":
-				if err := groups.HandlePromoteAdmin(jsonMarshal(msg), id, conn, nil); err != nil {
+				if resp, err := groups.HandlePromoteAdmin(jsonMarshal(msg), id); err != nil {
 					log.Printf("member-promote error: %v\n", err)
+				} else {
+					broadcastGroupEvent(resp, true)
 				}
 				continue
 			case "group-delete":
-				if err := groups.HandleDeleteGroup(jsonMarshal(msg), id, conn, nil); err != nil {
+				if resp, err := groups.HandleDeleteGroup(jsonMarshal(msg), id); err != nil {
 					log.Printf("group-delete error: %v\n", err)
+				} else {
+					broadcastGroupEvent(resp, true)
 				}
 				continue
 			}
@@ -527,6 +548,8 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 			Ts:   jsonTime(msg["ts"]),
 		}
 
+		log.Printf("[WebSocket] Received message from %s to %s (type=%v, has_cipher=%v, has_nonce=%v)\n", id, to, msg["type"], msg["cipher"] != nil, msg["nonce"] != nil)
+
 		if strings.HasPrefix(to, "#") {
 			g, err := storage.GetGroup(to)
 			if err == nil {
@@ -561,7 +584,9 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		clientsMux.RUnlock()
 		if ok {
 			msg["from"] = id
+			msg["chatWith"] = id // Recipient should see the conversation with the sender
 			delete(msg, "to")
+			log.Printf("Relaying message from %s to %s: has_cipher=%v, has_nonce=%v, has_messageId=%v\n", id, to, msg["cipher"] != nil, msg["nonce"] != nil, msg["messageId"] != nil)
 			if err := toClient.Send(msg); err != nil {
 				log.Println("relay write error:", err)
 			}
@@ -618,4 +643,32 @@ func buildGroupReactionLookup(conversationID string, history []models.StoredMess
 		}
 	}
 	return storage.GetReactions(conversationID, ids)
+}
+
+func broadcastGroupEvent(resp *groups.GroupMessage, includeSender bool) {
+	if resp == nil {
+		return
+	}
+
+	members := resp.Members
+	if len(members) == 0 && resp.GroupID != "" {
+		if g, err := storage.GetGroup(resp.GroupID); err == nil {
+			members = g.Members
+		}
+	}
+
+	if len(members) == 0 {
+		return
+	}
+
+	clientsMux.RLock()
+	defer clientsMux.RUnlock()
+	for _, m := range members {
+		if !includeSender && m == resp.From {
+			continue
+		}
+		if c, ok := clients[m]; ok {
+			c.Send(resp)
+		}
+	}
 }

@@ -7,7 +7,7 @@
   export let commonGroups: any[] = []
   export let isBlocked = false
   export let userNickname: string = ''
-  export let profile: { displayName?: string; bio?: string; avatarUrl?: string; bannerUrl?: string } | null = null
+  export let profile: { displayName?: string; bio?: string; avatarUrl?: string; bannerUrl?: string; status?: string; customMessage?: string; lastSeen?: number } | null = null
   export let loading = false
   export let error = ''
   export let isSelf = false
@@ -201,6 +201,11 @@
                 <div class="status-badge" class:online={isOnline}>
                   {isOnline ? '🟢 Online' : '⚫ Offline'}
                 </div>
+                {#if profile?.customMessage}
+                  <div class="custom-message-display">
+                    {profile.customMessage}
+                  </div>
+                {/if}
               </div>
 
               <div class="info-item">
@@ -709,6 +714,18 @@
   .status-badge.online {
     background: rgba(34, 197, 94, 0.1);
     color: var(--green);
+  }
+
+  .custom-message-display {
+    padding: 0.5rem 0.75rem;
+    background: var(--surface-lighter);
+    border-radius: 4px;
+    font-size: 0.85rem;
+    font-style: italic;
+    color: var(--subtext);
+    margin-top: 0.5rem;
+    white-space: normal;
+    word-wrap: break-word;
   }
 
   .error-text {
