@@ -22,6 +22,7 @@ export interface MessagingContext {
 export function createMessagingService(context: MessagingContext) {
   let isSending = false
   let typingTimeout: any = null
+  let sendTimeout: any = null
 
   function sendReadReceipt(from: string, messageId: string) {
     if (!context.ws || context.ws.readyState !== WebSocket.OPEN || !messageId) return
@@ -37,9 +38,9 @@ export function createMessagingService(context: MessagingContext) {
   }
 
   async function sendTo(to: string, text: string, replyTo?: { messageId: string; text: string; from: string }) {
-    console.log('[sendTo] Called', { to, textLength: text?.length })
+    console.log('[sendTo] Called', { to, textLength: text?.length, isSending })
     
-    // Pre-flight checks - NO early returns after this point
+    // Pre-flight checks
     if (!context.ws) {
       console.error('[sendTo] NO WEBSOCKET')
       return
@@ -49,7 +50,7 @@ export function createMessagingService(context: MessagingContext) {
       return
     }
     if (isSending) {
-      console.error('[sendTo] ALREADY SENDING')
+      console.error('[sendTo] ALREADY SENDING - rejecting')
       return
     }
 
@@ -60,6 +61,13 @@ export function createMessagingService(context: MessagingContext) {
     }
 
     isSending = true
+    console.log('[sendTo] isSending set to TRUE')
+    
+    // Safety timeout - if sending takes more than 5 seconds, reset the flag
+    sendTimeout = setTimeout(() => {
+      console.error('[sendTo] Send timeout - forcibly resetting isSending flag')
+      isSending = false
+    }, 5000)
     
     try {
       const messageId = Date.now() + '_' + Math.random().toString(36).slice(2, 11)
@@ -225,7 +233,9 @@ export function createMessagingService(context: MessagingContext) {
     } catch (e) {
       console.error('[sendTo] Unexpected error', e)
     } finally {
+      clearTimeout(sendTimeout)
       isSending = false
+      console.log('[sendTo] isSending reset to FALSE')
     }
   }
 
@@ -449,6 +459,15 @@ export function createMessagingService(context: MessagingContext) {
 
   function reset() {}
 
+  function resetSendingState() {
+    console.log('[resetSendingState] Forcing isSending to false')
+    if (sendTimeout) {
+      clearTimeout(sendTimeout)
+      sendTimeout = null
+    }
+    isSending = false
+  }
+
   return {
     sendReadReceipt,
     sendTo,
@@ -458,7 +477,8 @@ export function createMessagingService(context: MessagingContext) {
     handleTyping,
     handleEdit,
     handleDelete,
-    reset
+    reset,
+    resetSendingState
   }
 }
 

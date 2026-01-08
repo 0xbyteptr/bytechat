@@ -795,6 +795,11 @@
       }
     }, (status) => {
       wsStatus = status
+      // Reset sending state when WebSocket disconnects
+      if (status === 'disconnected' || status === 'connecting') {
+        console.log('[App] WebSocket status changed to', status, '- resetting sending state')
+        messagingService?.resetSendingState()
+      }
     })
     
     // Initialize services that need WebSocket after it's created
