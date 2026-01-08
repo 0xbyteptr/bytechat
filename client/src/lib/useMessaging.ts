@@ -37,7 +37,7 @@ export function createMessagingService(context: MessagingContext) {
   }
 
   async function sendTo(to: string, text: string, replyTo?: { messageId: string; text: string; from: string }) {
-    console.log('====== [sendTo] CALLED ======', { to, text: text?.substring(0, 30), isSending, wsReady: context.ws?.readyState === WebSocket.OPEN })
+    console.log('[sendTo] Called', { to, textLength: text?.length })
     
     // Pre-flight checks - NO early returns after this point
     if (!context.ws) {
@@ -60,19 +60,17 @@ export function createMessagingService(context: MessagingContext) {
     }
 
     isSending = true
-    console.log('[sendTo] isSending set to true')
     
     try {
       const messageId = Date.now() + '_' + Math.random().toString(36).slice(2, 11)
       // Add local message optimistically first
       const newMessage = { from: context.id, text, ts: Date.now(), messageId, replyTo, status: 'sending' as const }
-      console.log('Adding local message optimistically:', { messageId, to, text: text.substring(0, 50) })
+      console.log('[sendTo] Adding message optimistically', { messageId, to })
       context.updateMessagesMap((currentMap) => {
         const updatedMap = {
           ...currentMap,
           [to]: [...(currentMap[to] || []), newMessage].sort((a, b) => (a.ts || 0) - (b.ts || 0))
         }
-        console.log('Updated messagesMap:', { to, count: updatedMap[to]?.length })
         return updatedMap
       })
 
@@ -107,16 +105,12 @@ export function createMessagingService(context: MessagingContext) {
           
           // Only fetch if we don't have the key cached
           if (!mpk) {
-            console.log(`Key not cached for group member ${member}, fetching...`)
             await context.fetchContactKey(member)
             mpk = context.getKeys()[member]
-          } else {
-            console.log(`Using cached key for group member ${member}`)
           }
           
           if (mpk) {
             recipients[member] = mpk
-            console.log(`Got key for ${member}`)
           } else {
             console.warn(`No key available for group member ${member}`)
           }
@@ -124,31 +118,29 @@ export function createMessagingService(context: MessagingContext) {
 
         const keypair = context.getKeypair()
         if (keypair && Object.keys(recipients).length > 0) {
-          console.log(`Encrypting message for ${Object.keys(recipients).length} recipients using sync encryption`)
           // Use sync encryption for speed
           for (const member of Object.keys(recipients)) {
             const { cipher, nonce } = encrypt(keypair.secretKey, recipients[member], text)
             groupCiphers[member] = { cipher, nonce }
           }
-          console.log(`Group message encryption completed`)
         }
 
         payload.groupCiphers = groupCiphers
       } else {
         const keys = context.getKeys()
         let pk = keys[to]
+        console.log('[sendTo] Direct message - checking key cache', { to, hasCachedKey: !!pk })
         
         // Only fetch if we don't have the key cached
         if (!pk) {
-          console.log(`Key not cached for ${to}, fetching...`)
+          console.log('[sendTo] Key not cached, fetching...')
           await context.fetchContactKey(to)
           pk = context.getKeys()[to]
-        } else {
-          console.log(`Using cached key for ${to}`)
+          console.log('[sendTo] Key fetch completed', { hasPk: !!pk })
         }
         
         if (!pk) {
-          console.error(`Failed to get public key for ${to}`, { keysAvailable: Object.keys(keys).length, keys: Object.keys(keys) })
+          console.error(`[sendTo] Failed to get public key for ${to}`)
           // Mark message as failed
           context.updateMessagesMap((currentMap) => {
             const messages = currentMap[to] || []
@@ -166,7 +158,7 @@ export function createMessagingService(context: MessagingContext) {
 
         const keypair = context.getKeypair()
         if (!keypair) {
-          console.error('No encryption keypair available')
+          console.error('[sendTo] No encryption keypair available')
           // Mark message as failed
           context.updateMessagesMap((currentMap) => {
             const messages = currentMap[to] || []
@@ -182,12 +174,12 @@ export function createMessagingService(context: MessagingContext) {
           return
         }
 
-        console.log('Encrypting message with sync cipher')
-        // Use sync encryption for speed (faster than worker pool for single messages)
+        console.log('[sendTo] Encrypting message')
+        // Use sync encryption for speed
         const { cipher, nonce } = encrypt(keypair.secretKey, pk, text)
         payload.cipher = cipher
         payload.nonce = nonce
-        console.log('Encryption completed')
+        console.log('[sendTo] Encryption complete')
       }
 
       // Verify WS is still open before sending
@@ -208,27 +200,16 @@ export function createMessagingService(context: MessagingContext) {
         return
       }
 
-      console.log('Sending message payload', { to, messageId, hasGroupCiphers: !!payload.groupCiphers, hasCipher: !!payload.cipher })
+      console.log('[sendTo] About to send - WS ready, payload prepared')
       try {
-        context.ws.send(JSON.stringify({ type: 'message', ...payload }))
-        console.log('Message sent successfully over WebSocket', { to, messageId })
-        
-        // Update message status to 'sent' after successful send
-        context.updateMessagesMap((currentMap) => {
-          const messages = currentMap[to] || []
-          return {
-            ...currentMap,
-            [to]: messages.map(m => 
-              m.messageId === messageId 
-                ? { ...m, status: 'sent' as const }
-                : m
-            )
-          }
-        })
+        const msgObj = { type: 'message', ...payload }
+        console.log('[sendTo] Message object created, calling ws.send()')
+        context.ws.send(JSON.stringify(msgObj))
+        console.log('[sendTo] Message sent to WebSocket')
       } catch (e) {
-        console.error('Failed to send message over WebSocket', e)
+        console.error('[sendTo] ws.send() threw error', e)
         
-        // Update message status to 'failed' on error
+        // Mark message as failed on send error
         context.updateMessagesMap((currentMap) => {
           const messages = currentMap[to] || []
           return {
@@ -242,10 +223,9 @@ export function createMessagingService(context: MessagingContext) {
         })
       }
     } catch (e) {
-      console.error('Unexpected error in sendTo', e)
+      console.error('[sendTo] Unexpected error', e)
     } finally {
       isSending = false
-      console.log('[sendTo] isSending reset to false')
     }
   }
 

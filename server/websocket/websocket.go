@@ -130,6 +130,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		return
 	}
+	log.Printf("[Auth] Received auth message from %s: %v\n", r.RemoteAddr, authMsg)
 
 	authType, _ := authMsg["type"].(string)
 	if authType != "auth" {
@@ -144,6 +145,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 
 	id, _ := authMsg["id"].(string)
 	token, _ := authMsg["token"].(string)
+	log.Printf("[Auth] Authenticating user: %s\n", id)
 
 	if id == "" || !auth.IsValidToken(id, token) {
 		log.Printf("Unauthorized WS attempt from %s (id: %s)\n", r.RemoteAddr, id)
@@ -154,6 +156,7 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		return
 	}
+	log.Printf("[Auth] Authentication successful for %s\n", id)
 
 	// Clear read deadline after successful auth
 	conn.SetReadDeadline(time.Time{})
@@ -171,10 +174,14 @@ func Handler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s connected via WS from %s\n", id, r.RemoteAddr)
 
 	// Send authentication success
-	c.Send(map[string]interface{}{
+	log.Printf("[Auth] Sending auth success to %s\n", id)
+	if err := c.Send(map[string]interface{}{
 		"type":   "auth",
 		"status": "success",
-	})
+	}); err != nil {
+		log.Printf("[Auth] Failed to send auth success to %s: %v\n", id, err)
+	}
+	log.Printf("[Auth] Auth success sent to %s\n", id)
 
 	// Broadcast updated presence to all users
 	go BroadcastPresence()

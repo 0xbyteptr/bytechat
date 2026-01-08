@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, tick } from 'svelte'
   import { cryptoPool } from './lib/cryptoPool'
   import Sidebar from './components/Sidebar.svelte'
   import ChatWindow from './components/ChatWindow.svelte'
@@ -743,19 +743,17 @@
         console.log('Processing message:', { messageId: msgObj.messageId, from: msgObj.from, text: msgObj.text?.substring(0, 50), isHistory: msg.isHistory })
 
         // Use requestIdleCallback for non-urgent UI updates
-        const updateMessages = () => {
+        const updateMessages = async () => {
           console.log('[App] Updating messagesMap with received message:', { messageId: msgObj.messageId, chatWith, from: msgObj.from })
           const nextList = [...(messagesMap[chatWith]||[]), msgObj].sort((a, b) => (a.ts || 0) - (b.ts || 0))
-          messagesMap = {
+          const newMessagesMap = {
             ...messagesMap,
             [chatWith]: capMessages(nextList)
           }
-          // Force reactivity by reassigning currentMessages if this is the current contact
-          if (chatWith === contact) {
-            currentMessages = messagesMap[contact] || []
-          }
-          // Cache the message
-          MessageCacheLib.cacheMessage(chatWith, msgObj).catch(err => console.warn('Failed to cache message:', err))
+          messagesMap = newMessagesMap
+          console.log('[App] messagesMap updated, calling tick()')
+          await tick()
+          console.log('[App] tick() complete, reactive statement should have run')
         }
         
         // For history messages, defer to idle time
@@ -771,7 +769,9 @@
         
         // For live messages, update immediately
         console.log('[App] Updating live message immediately')
-        updateMessages()
+        await updateMessages()
+        // Cache the message asynchronously
+        MessageCacheLib.cacheMessage(chatWith, msgObj).catch(err => console.warn('Failed to cache message:', err))
 
         const pref = notificationPrefs[chatWith] || 'all'
         const isMention = typeof text === 'string' && id && text.toLowerCase().includes(`@${id.toLowerCase()}`)

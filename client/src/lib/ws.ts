@@ -18,28 +18,17 @@ export function connectWS(id: string, token: string, onMessage: (m: any)=>void, 
     authenticated = false
     
     ws = new WebSocket(url)
+    console.log('[ws] WebSocket created')
     
-    ws.onopen = () => {
-      console.log('ws open, sending auth...')
-      onStatus('authenticating')
-      
-      // Send authentication message
-      ws?.send(JSON.stringify({
-        type: 'auth',
-        id: id,
-        token: token
-      }))
-    }
-    
-    // Respond to ping messages automatically (browser handles this natively)
-    // WebSocket API automatically responds to ping with pong
-    
+    // Set up message handler FIRST, before onopen
     ws.onmessage = (ev) => {
       try {
         const data = JSON.parse(ev.data)
+        console.log('[ws.onmessage] Received:', data.type, data)
         
         // Handle authentication response
         if (data.type === 'auth') {
+          console.log('[ws.auth] Auth response received:', data)
           if (data.status === 'success') {
             console.log('ws authenticated')
             authenticated = true
@@ -65,11 +54,28 @@ export function connectWS(id: string, token: string, onMessage: (m: any)=>void, 
         // Only process regular messages after authentication
         if (authenticated) {
           onMessage(data)
+        } else {
+          console.warn('[ws] Ignoring message received before authentication:', data.type)
         }
       } catch(e) {
         console.warn('invalid ws message', e)
       }
     }
+    
+    ws.onopen = () => {
+      console.log('ws open, sending auth...')
+      onStatus('authenticating')
+      
+      // Send authentication message
+      ws?.send(JSON.stringify({
+        type: 'auth',
+        id: id,
+        token: token
+      }))
+    }
+    
+    // Respond to ping messages automatically (browser handles this natively)
+    // WebSocket API automatically responds to ping with pong
     
     ws.onclose = () => {
       console.log('ws closed')
