@@ -88,6 +88,7 @@
   let typingMap: Record<string, boolean> = {}
   let pendingKeys = new Set<string>()
   let failedKeys = new Set<string>()
+  let processingMessages = new Set<string>() // Track messages currently being processed to prevent duplicates
   let pinnedMap: Record<string, string[]> = {}
   let profiles: Record<string, any> = {}
   let profileLoading = false
@@ -700,7 +701,8 @@
 
         if (!text) {
           console.error('[Decrypt] Message failed to decrypt:', { messageId: msg.messageId, from: msg.from, messageType: msg.type })
-          text = '<failed to decrypt message>'
+          // If decryption fails, render a placeholder instead of dropping the message
+          text = '[Unable to decrypt message]'
         }
         
         let msgObj: any = { 
@@ -729,8 +731,12 @@
           // Not a JSON/file message, treat as plain text
         }
 
-        // Avoid duplicates by checking messageId
+        // Avoid duplicates by checking messageId - check both existing messages and messages being processed
         if (msgObj.messageId) {
+          if (processingMessages.has(msgObj.messageId)) {
+            console.log('Skipping message already being processed:', msgObj.messageId)
+            return
+          }
           const isDuplicate = (messagesMap[chatWith] || []).some(m => 
             m.messageId && m.messageId === msgObj.messageId
           )
@@ -738,6 +744,8 @@
             console.log('Skipping duplicate message:', msgObj.messageId)
             return
           }
+          // Mark as being processed
+          processingMessages.add(msgObj.messageId)
         }
 
         console.log('Processing message:', { messageId: msgObj.messageId, from: msgObj.from, text: msgObj.text?.substring(0, 50), isHistory: msg.isHistory })
@@ -754,22 +762,44 @@
           console.log('[App] messagesMap updated, calling tick()')
           await tick()
           console.log('[App] tick() complete, reactive statement should have run')
+          // Remove from processing set after successful update
+          if (msgObj.messageId) {
+            processingMessages.delete(msgObj.messageId)
+          }
         }
         
         // For history messages, defer to idle time
         if (msg.isHistory) {
           console.log('[App] Deferring history message to idle time')
           if ('requestIdleCallback' in window) {
-            requestIdleCallback(() => updateMessages(), { timeout: 1000 })
+            requestIdleCallback(() => updateMessages().catch(err => {
+              console.error('Failed to process history message:', err)
+              if (msgObj.messageId) {
+                processingMessages.delete(msgObj.messageId)
+              }
+            }), { timeout: 1000 })
           } else {
-            setTimeout(updateMessages, 0)
+            setTimeout(() => updateMessages().catch(err => {
+              console.error('Failed to process history message:', err)
+              if (msgObj.messageId) {
+                processingMessages.delete(msgObj.messageId)
+              }
+            }), 0)
           }
           return
         }
         
         // For live messages, update immediately
         console.log('[App] Updating live message immediately')
-        await updateMessages()
+        try {
+          await updateMessages()
+        } catch (err) {
+          console.error('Failed to process live message:', err)
+          if (msgObj.messageId) {
+            processingMessages.delete(msgObj.messageId)
+          }
+          return
+        }
         // Cache the message asynchronously
         MessageCacheLib.cacheMessage(chatWith, msgObj).catch(err => console.warn('Failed to cache message:', err))
 
@@ -1220,9 +1250,6 @@
     // Initialize message cache
     MessageCacheLib.initializeCache().catch(err => console.warn('Failed to initialize message cache:', err))
     
-    // Show loading screen and request permissions (async, non-blocking)
-    initializeApp()
-    
     // Initialize VoIP with remote audio element
     if (remoteAudioEl) {
       VoipLib.initVoIP(remoteAudioEl, sendVoipSignal)
@@ -1245,6 +1272,8 @@
       }
       document.addEventListener('visibilitychange', handleVisibilityChange)
 
+      // Try to restore session first before showing loading screen
+      let sessionRestored = false
       const saved = localStorage.getItem('bytechat_session')
       if(saved) {
         try {
@@ -1263,12 +1292,15 @@
           contact = s.lastContact || null
           if (id && sessionToken && keypair) {
             isLoggedIn = true
+            sessionRestored = true
             // Rebuild contacts from restored messagesMap
             rebuildContacts()
             connect()
             NotificationsLib.setupNotifications(id, sessionToken, API_URL)
             profileService?.loadProfile(id)
             // Skip immediate validation - let periodic check handle it
+            // Skip loading screen since session was restored
+            isLoading = false
           }
         } catch (e) {
           console.error('Failed to restore session:', e)
@@ -1287,11 +1319,14 @@
               contact = s.lastContact || null
               if (id && sessionToken && keypair) {
                 isLoggedIn = true
+                sessionRestored = true
                 // Rebuild contacts from restored messagesMap
                 rebuildContacts()
                 connect()
                 NotificationsLib.setupNotifications(id, sessionToken, API_URL)
                 profileService?.loadProfile(id)
+                // Skip loading screen since session was restored
+                isLoading = false
                 console.log('Restored from backup')
               }
             }
@@ -1299,6 +1334,11 @@
             console.error('Failed to restore from backup:', backupError)
           }
         }
+      }
+
+      // Only show loading screen if session wasn't restored
+      if (!sessionRestored) {
+        initializeApp()
       }
 
       // Check session every 5 minutes instead of every minute
@@ -2140,7 +2180,16 @@
               profileService?.loadProfile(e.detail.userId)
               showUserProfile = true
             }}
-            on:addContact={(e) => contactService?.addContact(e.detail.id)}
+            on:addContact={(e) => {
+              contactService?.addContact(e.detail.id).then(success => {
+                if (success) {
+                  // Add contact to messagesMap with empty messages array to trigger sidebar update
+                  if (!messagesMap[e.detail.id]) {
+                    messagesMap = { ...messagesMap, [e.detail.id]: [] }
+                  }
+                }
+              }).catch(err => console.error('Failed to add contact:', err))
+            }}
             on:createGroup={(e) => createGroup(e.detail.name, e.detail.members)}
             on:logout={logout}
             on:openSettings={openSettings}
@@ -2178,6 +2227,10 @@
                   return
                 }
                 console.log('[SEND] Calling messagingService.sendTo', { to: e.detail.to, text: e.detail.text?.substring(0, 30) })
+                // Ensure contact is in messagesMap before sending
+                if (!messagesMap[e.detail.to]) {
+                  messagesMap = { ...messagesMap, [e.detail.to]: [] }
+                }
                 messagingService.sendTo(e.detail.to, e.detail.text, e.detail.replyTo)
               }}
               on:sendFile={(e) => messagingService?.sendFile(e.detail.to, e.detail.fileData, e.detail.fileName, e.detail.fileType)}
@@ -2471,7 +2524,11 @@
           showUserProfile = false
         }}
         on:addToContacts={(e) => {
-          contactService?.addContact(e.detail.userId, e.detail.name)
+          contactService?.addContact(e.detail.userId, e.detail.name).then(success => {
+            if (success && !messagesMap[e.detail.userId]) {
+              messagesMap = { ...messagesMap, [e.detail.userId]: [] }
+            }
+          }).catch(err => console.error('Failed to add contact:', err))
           showUserProfile = false
         }}
         on:removeFromContacts={(e) => {

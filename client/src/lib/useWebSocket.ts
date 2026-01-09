@@ -50,7 +50,9 @@ export function connectWebSocket(
     
     // Handle typing indicator
     if (msg.type === 'typing') {
-      MessagesLib.setTyping(msg.from, msg.isTyping)
+      // Use chatWith if available to properly route to correct conversation, otherwise fall back to from
+      const typingChatWith = msg.chatWith || msg.from
+      MessagesLib.setTyping(typingChatWith, msg.isTyping)
       handlers.onTyping(msg.from, msg.isTyping)
       return
     }
@@ -75,7 +77,9 @@ export function connectWebSocket(
     
     // Handle voice messages
     if (msg.type === 'voice') {
-      const chatWith = msg.from
+      // Use chatWith if available (for group messages), otherwise determine from msg.from
+      const isGroup = msg.chatWith ? msg.chatWith.startsWith('#') : (msg.to && msg.to.startsWith('#'))
+      const chatWith = msg.chatWith || (isGroup ? msg.to : msg.from)
       
       // Fetch public key if needed
       if (!keysMap[msg.from] && !pendingKeys.has(msg.from) && !failedKeys.has(msg.from)) {

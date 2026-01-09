@@ -56,7 +56,8 @@ class CryptoWorkerPool {
     }
     
     this.callbacks.set(id, { resolve, reject })
-    worker.postMessage({ ...task, id })
+    // Preserve the task structure (type and data) and add id
+    worker.postMessage({ type: task.type, data: task.data, id })
   }
   
   async execute(task: any): Promise<any> {

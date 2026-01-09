@@ -47,3 +47,28 @@ type Profile struct {
 	LastSeen      int64     `json:"lastSeen,omitempty"`
 	UpdatedAt     time.Time `json:"updatedAt"`
 }
+
+// Friend represents a confirmed friendship relationship
+type Friend struct {
+	ID        int64     `json:"id"`
+	UserID1   string    `json:"userId1"`
+	UserID2   string    `json:"userId2"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// FriendRequest represents a pending friend request
+type FriendRequest struct {
+	ID        int64     `json:"id"`
+	FromID    string    `json:"fromId"`
+	ToID      string    `json:"toId"`
+	Status    string    `json:"status"` // pending, accepted, rejected, blocked
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// FriendResponse represents friend data with profile information
+type FriendResponse struct {
+	User      Profile   `json:"user"`
+	IsFriend  bool      `json:"isFriend"`
+	CreatedAt time.Time `json:"createdAt,omitempty"`
+}

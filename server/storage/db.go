@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,12 +20,26 @@ var (
 	mu sync.RWMutex
 )
 
-// InitDB initializes PostgreSQL connection and creates tables
+// InitDB initializes PostgreSQL connection and creates tables, creating the database if needed
 func InitDB() error {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		// Default PostgreSQL connection string
 		dsn = "postgres://bytechat:bytechat@localhost:5432/bytechat?sslmode=disable"
+	}
+
+	// Try to ensure database exists (best effort, fail gracefully if no permission)
+	if err := ensureDatabase(dsn); err != nil {
+		fmt.Printf("Warning: Could not ensure database exists (this may be normal if database already exists): %v\n", err)
+	}
+
+	// Extract username from DSN for permission handling
+	userAndPass := strings.Split(strings.TrimPrefix(dsn, "postgres://"), "@")[0]
+	username := strings.Split(userAndPass, ":")[0]
+
+	// Grant schema permissions using postgres superuser
+	if err := grantSchemaPermissions(dsn, username); err != nil {
+		fmt.Printf("Warning: Could not grant schema permissions (may need manual setup): %v\n", err)
 	}
 
 	var err error
@@ -41,12 +56,156 @@ func InitDB() error {
 
 	// Test the connection
 	if err := db.Ping(); err != nil {
+		// Provide helpful error message if database doesn't exist
+		if strings.Contains(err.Error(), "does not exist") {
+			return fmt.Errorf(`failed to connect to database: database does not exist
+			
+To set up the database, run one of the following:
+
+1. Using Docker Compose (recommended):
+   docker-compose up -d
+   
+2. Using PostgreSQL directly:
+   psql -U postgres -f server/init-db.sql
+   
+3. Manually:
+   createdb -U postgres bytechat
+
+Then try running the server again: %w`, err)
+		}
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 
 	// Create tables
 	if err := createTables(); err != nil {
 		return fmt.Errorf("failed to create tables: %w", err)
+	}
+
+	return nil
+}
+
+// ensureDatabase creates the database if it doesn't exist
+func ensureDatabase(dsn string) error {
+	// Parse connection string to extract database name
+	parts := strings.Split(dsn, "/")
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid database URL format")
+	}
+
+	// Get the part after the last /
+	lastPart := parts[len(parts)-1]
+
+	// Extract database name and query params
+	dbAndParams := strings.Split(lastPart, "?")
+	dbName := dbAndParams[0]
+	if dbName == "" {
+		return fmt.Errorf("could not extract database name from URL")
+	}
+
+	// Build admin DSN by replacing database name with 'postgres'
+	baseDSN := strings.Join(parts[:len(parts)-1], "/") + "/postgres"
+	if len(dbAndParams) > 1 {
+		baseDSN += "?" + dbAndParams[1]
+	}
+
+	adminDB, err := sql.Open("postgres", baseDSN)
+	if err != nil {
+		return fmt.Errorf("failed to open admin database connection: %w", err)
+	}
+	defer adminDB.Close()
+
+	// Test connection
+	if err := adminDB.Ping(); err != nil {
+		return fmt.Errorf("failed to connect to postgres database: %w", err)
+	}
+
+	// Check if database exists
+	var exists bool
+	checkSQL := `SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1);`
+	err = adminDB.QueryRow(checkSQL, dbName).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("failed to check if database exists: %w", err)
+	}
+
+	if !exists {
+		// Database doesn't exist, create it
+		createSQL := fmt.Sprintf(`CREATE DATABASE %s;`, dbName)
+		_, err = adminDB.Exec(createSQL)
+		if err != nil {
+			return fmt.Errorf("failed to create database: %w", err)
+		}
+		fmt.Printf("Created database: %s\n", dbName)
+	}
+
+	return nil
+}
+
+// grantSchemaPermissions grants necessary permissions to a user for schema operations
+func grantSchemaPermissions(dsn string, username string) error {
+	if username == "" || username == "postgres" {
+		return nil // Skip for postgres user or if username couldn't be extracted
+	}
+
+	// Parse DSN to get host, port, database info
+	parts := strings.Split(dsn, "/")
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid database URL format")
+	}
+
+	lastPart := parts[len(parts)-1]
+	dbAndParams := strings.Split(lastPart, "?")
+	dbName := dbAndParams[0]
+
+	// Build admin DSN by replacing database name with 'postgres' but keeping it as postgres user
+	baseDSN := strings.Join(parts[:len(parts)-1], "/") + "/postgres"
+	if len(dbAndParams) > 1 {
+		baseDSN += "?" + dbAndParams[1]
+	}
+
+	// Connect as postgres superuser to grant permissions
+	adminDB, err := sql.Open("postgres", baseDSN)
+	if err != nil {
+		return err
+	}
+	defer adminDB.Close()
+
+	// Test connection first
+	if err := adminDB.Ping(); err != nil {
+		return err
+	}
+
+	// Grant permissions on the target database
+	_, err = adminDB.Exec(fmt.Sprintf(`GRANT ALL PRIVILEGES ON DATABASE %s TO %s;`, dbName, username))
+	if err != nil && !strings.Contains(err.Error(), "already granted") {
+		return err
+	}
+
+	// Now connect to the target database to grant schema permissions
+	targetDB, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return err
+	}
+	defer targetDB.Close()
+
+	// Grant permissions on the public schema
+	_, err = targetDB.Exec(fmt.Sprintf(`GRANT ALL PRIVILEGES ON SCHEMA public TO %s;`, username))
+	if err != nil && !strings.Contains(err.Error(), "already granted") {
+		// This might fail if connected as regular user, try with admin connection instead
+		_, err2 := adminDB.Exec(fmt.Sprintf(`GRANT ALL PRIVILEGES ON SCHEMA public TO %s;`, username))
+		if err2 != nil {
+			return err
+		}
+	}
+
+	// Grant default privileges for future objects
+	_, err = adminDB.Exec(fmt.Sprintf(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO %s;`, username))
+	if err != nil && !strings.Contains(err.Error(), "already granted") {
+		return err
+	}
+
+	_, err = adminDB.Exec(fmt.Sprintf(`ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO %s;`, username))
+	if err != nil && !strings.Contains(err.Error(), "already granted") {
+		return err
 	}
 
 	return nil
@@ -142,6 +301,28 @@ func createTables() error {
 		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 	);
 
+	-- Friends table (for confirmed friendships)
+	CREATE TABLE IF NOT EXISTS friends (
+		id BIGSERIAL PRIMARY KEY,
+		user_id_1 TEXT NOT NULL,
+		user_id_2 TEXT NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(user_id_1, user_id_2),
+		CHECK (user_id_1 < user_id_2)
+	);
+
+	-- Friend requests table (pending friend requests)
+	CREATE TABLE IF NOT EXISTS friend_requests (
+		id BIGSERIAL PRIMARY KEY,
+		from_id TEXT NOT NULL,
+		to_id TEXT NOT NULL,
+		status TEXT DEFAULT 'pending',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(from_id, to_id),
+		CHECK (from_id != to_id)
+	);
+
 	-- Create indexes for better performance
 	CREATE INDEX IF NOT EXISTS idx_message_history_to_id ON message_history(to_id);
 	CREATE INDEX IF NOT EXISTS idx_message_history_timestamp ON message_history(timestamp);
@@ -153,6 +334,11 @@ func createTables() error {
 	CREATE INDEX IF NOT EXISTS idx_public_keys_created ON public_keys(created_at);
 	CREATE INDEX IF NOT EXISTS idx_user_profiles_id ON user_profiles(id);
 	CREATE INDEX IF NOT EXISTS idx_push_tokens_id ON push_tokens(id);
+	CREATE INDEX IF NOT EXISTS idx_friends_user_id_1 ON friends(user_id_1);
+	CREATE INDEX IF NOT EXISTS idx_friends_user_id_2 ON friends(user_id_2);
+	CREATE INDEX IF NOT EXISTS idx_friend_requests_from_id ON friend_requests(from_id);
+	CREATE INDEX IF NOT EXISTS idx_friend_requests_to_id ON friend_requests(to_id);
+	CREATE INDEX IF NOT EXISTS idx_friend_requests_status ON friend_requests(status);
 	`
 
 	_, err := db.Exec(schema)

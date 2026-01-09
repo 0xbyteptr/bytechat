@@ -16,7 +16,7 @@
   export let isOnline = false
   export let isGroup = false
   export let notificationMode: 'all' | 'mentions' | 'mute' = 'all'
-  export const group: any = null
+  export let group: any = null
   interface Message {
     from: string;
     text: string;

@@ -1,6 +1,37 @@
 import nacl from 'tweetnacl'
 import { decodeUTF8, encodeUTF8, encodeBase64, decodeBase64 } from 'tweetnacl-util'
 
+// Robust base64 decoder mirroring crypto.ts to avoid strict decode failures
+const cleanBase64 = (s: string) => {
+  if (typeof s !== 'string') return ''
+  return s.trim().replace(/-/g, '+').replace(/_/g, '/').replace(/\s/g, '')
+}
+
+function robustDecodeBase64(s: string): Uint8Array {
+  if (!s || typeof s !== 'string') return new Uint8Array(0)
+  let cleaned = cleanBase64(s)
+  if (!cleaned) return new Uint8Array(0)
+
+  while (cleaned.length % 4 !== 0) cleaned += '='
+
+  try {
+    if (typeof atob !== 'undefined') {
+      const binary = atob(cleaned)
+      const bytes = new Uint8Array(binary.length)
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+      return bytes
+    }
+  } catch (e) {
+    // fall back below
+  }
+
+  try {
+    return decodeBase64(cleaned)
+  } catch (e) {
+    return new Uint8Array(0)
+  }
+}
+
 self.onmessage = async (e: MessageEvent) => {
   const { type, id, data } = e.data
 
@@ -12,27 +43,37 @@ self.onmessage = async (e: MessageEvent) => {
         // Validate all parameters are strings
         if (typeof secretKey !== 'string' || typeof publicKey !== 'string' || 
             typeof cipher !== 'string' || typeof nonce !== 'string') {
+          const error = `Invalid decrypt params: sk=${typeof secretKey}, pk=${typeof publicKey}, cipher=${typeof cipher}, nonce=${typeof nonce}`
+          console.error('[Worker] ' + error)
           self.postMessage({ 
             type: 'error', 
             id, 
-            error: `expected string, got: sk=${typeof secretKey}, pk=${typeof publicKey}, cipher=${typeof cipher}, nonce=${typeof nonce}` 
+            error
           })
           return
         }
         
-        const sk = decodeBase64(secretKey)
-        const pk = decodeBase64(publicKey)
-        const cipherBytes = decodeBase64(cipher)
-        const nonceBytes = decodeBase64(nonce)
-        
-        const decrypted: any = nacl.box.open(cipherBytes, nonceBytes, pk, sk)
-        if (!decrypted) {
-          self.postMessage({ type: 'error', id, error: 'Decryption failed' })
-          return
+        try {
+          const sk = robustDecodeBase64(secretKey)
+          const pk = robustDecodeBase64(publicKey)
+          const cipherBytes = robustDecodeBase64(cipher)
+          const nonceBytes = robustDecodeBase64(nonce)
+          
+          if (!sk.length || !pk.length || !cipherBytes.length || !nonceBytes.length) {
+            throw new Error('Decoded values are empty')
+          }
+          
+          const decrypted: any = nacl.box.open(cipherBytes, nonceBytes, pk, sk)
+          if (!decrypted) {
+            self.postMessage({ type: 'error', id, error: 'Decryption failed: nacl.box.open returned null' })
+            return
+          }
+          
+          const text = decodeUTF8(decrypted as any)
+          self.postMessage({ type: 'success', id, result: text })
+        } catch (decryptError: any) {
+          self.postMessage({ type: 'error', id, error: `Decryption error: ${decryptError.message}` })
         }
-        
-        const text = decodeUTF8(decrypted as any)
-        self.postMessage({ type: 'success', id, result: text })
         break
       }
       
@@ -49,8 +90,8 @@ self.onmessage = async (e: MessageEvent) => {
           return
         }
         
-        const sk = decodeBase64(secretKey)
-        const pk = decodeBase64(publicKey)
+        const sk = robustDecodeBase64(secretKey)
+        const pk = robustDecodeBase64(publicKey)
         const nonce = nacl.randomBytes(24)
         const messageBytes = encodeUTF8(text as any as any)
         
@@ -80,7 +121,7 @@ self.onmessage = async (e: MessageEvent) => {
           return
         }
         
-        const sk = decodeBase64(secretKey)
+        const sk = robustDecodeBase64(secretKey)
         const results: Record<string, { cipher: string, nonce: string }> = {}
         
         for (const [memberId, publicKey] of Object.entries(recipients)) {

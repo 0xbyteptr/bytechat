@@ -16,6 +16,7 @@ import (
 
 	"bytechat/auth"
 	"bytechat/cdn"
+	"bytechat/friends"
 	"bytechat/groups"
 	"bytechat/middleware"
 	"bytechat/profile"
@@ -114,6 +115,7 @@ func main() {
 	mux.HandleFunc("/profile", profile.Handler)
 	mux.HandleFunc("/profile/status", profile.StatusHandler)
 	mux.HandleFunc("/validate-session", auth.ValidateSessionHandler)
+	mux.HandleFunc("/friends", friends.Handler)
 	mux.HandleFunc("/cdn/upload", cdn.UploadHandler)
 	mux.HandleFunc("/cdn/file/", cdn.DownloadHandler)
 	mux.HandleFunc("/ws", websocket.Handler)
